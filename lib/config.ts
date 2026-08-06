@@ -96,9 +96,14 @@ export function loadConfig(environment: Record<string, string | undefined> = pro
   }
 
   const applicationUrl = new URL(raw.NEXTAUTH_URL);
+  const keycloakIssuerUrl = new URL(raw.KEYCLOAK_ISSUER);
 
   if (raw.APP_ENVIRONMENT !== "local" && applicationUrl.protocol !== "https:") {
     throw new Error("NEXTAUTH_URL must use HTTPS outside local development");
+  }
+
+  if (raw.APP_ENVIRONMENT !== "local" && keycloakIssuerUrl.protocol !== "https:") {
+    throw new Error("KEYCLOAK_ISSUER must use HTTPS outside local development");
   }
 
   return Object.freeze({

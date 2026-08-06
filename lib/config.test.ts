@@ -28,6 +28,25 @@ describe("loadConfig", () => {
     });
   });
 
+  it("accepts the local Keycloak issuer used by Compose", () => {
+    expect(loadConfig({
+      ...validEnvironment,
+      APP_ENVIRONMENT: "local",
+      KEYCLOAK_ISSUER: "http://keycloak.localhost:8080/realms/internal"
+    }).keycloakIssuer).toBe("http://keycloak.localhost:8080/realms/internal");
+  });
+
+  it("rejects a non-local HTTP Keycloak issuer", () => {
+    const environment = {
+      ...validEnvironment,
+      APP_ENVIRONMENT: "deployment",
+      NEXTAUTH_URL: "https://s3-browser.internal.example",
+      KEYCLOAK_ISSUER: "http://keycloak.internal.example/realms/internal"
+    };
+
+    expect(() => loadConfig(environment)).toThrow(/KEYCLOAK_ISSUER.*HTTPS/);
+  });
+
   it("rejects an incomplete database configuration", () => {
     const environment = { ...validEnvironment, DATABASE_URL: undefined };
 
