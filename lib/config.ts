@@ -21,6 +21,9 @@ const rawConfigSchema = z.object({
   S3_TRANSFER_LIMIT: z.coerce.number().int().min(1).default(5),
   S3_ARCHIVE_MAX_OBJECTS: z.coerce.number().int().min(1).default(1000),
   S3_ARCHIVE_MAX_BYTES: z.coerce.number().int().min(1).default(DEFAULT_ARCHIVE_BYTES),
+  S3_ENDPOINT_URL: z.string().optional(),
+  S3_ACCESS_KEY_ID: z.string().optional(),
+  S3_SECRET_ACCESS_KEY: z.string().optional(),
   AWS_ACCESS_KEY_ID: z.string().optional(),
   AWS_SECRET_ACCESS_KEY: z.string().optional(),
   AWS_SESSION_TOKEN: z.string().optional()
@@ -40,6 +43,11 @@ export type AppConfig = Readonly<{
   roleClaim: string;
   roleMapping: Readonly<Record<string, AppRole>>;
   isLocalDevelopment: boolean;
+  localS3: {
+    endpointUrl: string;
+    accessKeyId: string;
+    secretAccessKey: string;
+  } | null;
   objectMaxBytes: number;
   transferLimit: number;
   archiveMaxObjects: number;
@@ -95,6 +103,34 @@ export function loadConfig(environment: Record<string, string | undefined> = pro
     throw new Error("Static AWS credentials are forbidden; configure IRSA instead");
   }
 
+  const localS3Values = [raw.S3_ENDPOINT_URL, raw.S3_ACCESS_KEY_ID, raw.S3_SECRET_ACCESS_KEY];
+  const hasAnyLocalS3Value = localS3Values.some((value) => value !== undefined);
+  const hasCompleteLocalS3Config = localS3Values.every(Boolean);
+
+  if (raw.APP_ENVIRONMENT !== "local" && hasAnyLocalS3Value) {
+    throw new Error("S3_ENDPOINT_URL and local S3 credentials are allowed only in local development");
+  }
+
+  if (raw.APP_ENVIRONMENT === "local" && hasAnyLocalS3Value && !hasCompleteLocalS3Config) {
+    throw new Error("S3_ENDPOINT_URL, S3_ACCESS_KEY_ID, and S3_SECRET_ACCESS_KEY must be supplied together");
+  }
+
+  let localS3: AppConfig["localS3"] = null;
+
+  if (hasCompleteLocalS3Config) {
+    try {
+      new URL(raw.S3_ENDPOINT_URL!);
+    } catch {
+      throw new Error("S3_ENDPOINT_URL must be a valid URL");
+    }
+
+    localS3 = Object.freeze({
+      endpointUrl: raw.S3_ENDPOINT_URL!,
+      accessKeyId: raw.S3_ACCESS_KEY_ID!,
+      secretAccessKey: raw.S3_SECRET_ACCESS_KEY!
+    });
+  }
+
   const applicationUrl = new URL(raw.NEXTAUTH_URL);
   const keycloakIssuerUrl = new URL(raw.KEYCLOAK_ISSUER);
 
@@ -118,6 +154,7 @@ export function loadConfig(environment: Record<string, string | undefined> = pro
     roleClaim: raw.S3_ROLE_CLAIM,
     roleMapping: Object.freeze(parseRoleMapping(raw.S3_ROLE_MAPPING)),
     isLocalDevelopment: raw.APP_ENVIRONMENT === "local",
+    localS3,
     objectMaxBytes: raw.S3_OBJECT_MAX_BYTES,
     transferLimit: raw.S3_TRANSFER_LIMIT,
     archiveMaxObjects: raw.S3_ARCHIVE_MAX_OBJECTS,

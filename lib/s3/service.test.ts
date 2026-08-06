@@ -76,4 +76,18 @@ describe("S3 service", () => {
     await expect(limitedService.getPrefixArchive("reports", "")).rejects.toThrow(ArchiveLimitError);
     expect(send).toHaveBeenLastCalledWith(expect.any(ListObjectsV2Command));
   });
+
+  it("creates a ZIP archive for objects under a prefix", async () => {
+    send.mockResolvedValueOnce({ Contents: [{ Key: "reports/january.txt", Size: 6 }] });
+    send.mockResolvedValueOnce({ Body: Readable.from("report") });
+
+    const archive = await service.getPrefixArchive("reports", "reports/");
+
+    expect(archive.objectCount).toBe(1);
+    expect(archive.totalSize).toBe(6);
+
+    const chunks: Buffer[] = [];
+    for await (const chunk of archive.stream) chunks.push(Buffer.from(chunk));
+    expect(Buffer.concat(chunks).length).toBeGreaterThan(0);
+  });
 });

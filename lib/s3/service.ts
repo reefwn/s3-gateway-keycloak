@@ -7,14 +7,12 @@ import {
   PutObjectCommand,
   type S3Client
 } from "@aws-sdk/client-s3";
-import { createRequire } from "node:module";
 import { Readable } from "node:stream";
-import type { Archiver, ArchiverOptions } from "archiver";
+import { ZipArchive } from "archiver";
 
 import { assertSafeObjectKey, toPrefixMarkerKey } from "@/lib/objects/keys";
 
 type S3ClientLike = Pick<S3Client, "send">;
-const createArchiver = createRequire(import.meta.url)("archiver") as (format: string, options?: ArchiverOptions) => Archiver;
 
 export class AllowedBucketError extends Error {
   constructor() {
@@ -155,7 +153,7 @@ export function createS3Service(input: Readonly<{
         continuationToken = page.NextContinuationToken;
       } while (continuationToken);
 
-      const archive = createArchiver("zip", { zlib: { level: 6 } });
+      const archive = new ZipArchive({ zlib: { level: 6 } });
       for (const object of keys) {
         const output = await input.client.send(new GetObjectCommand({ Bucket: bucket, Key: object.key }));
         if (!output.Body) throw new Error("S3 returned no object body");
