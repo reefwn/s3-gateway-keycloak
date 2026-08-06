@@ -6,6 +6,7 @@ services:
     command: bun dev
     environment:
       DATABASE_URL: postgres://s3_browser:s3_browser@postgres:5432/s3_browser
+      KEYCLOAK_ISSUER: http://keycloak.localhost:8080/realms/internal
     env_file:
       - .env
     ports:
@@ -15,6 +16,8 @@ services:
       - bun_modules:/app/node_modules
     depends_on:
       postgres:
+        condition: service_healthy
+      keycloak:
         condition: service_healthy
 
   postgres:
@@ -33,6 +36,50 @@ services:
     volumes:
       - postgres_data:/var/lib/postgresql/data
 
+  keycloak-postgres:
+    image: postgres:17-alpine
+    environment:
+      POSTGRES_DB: keycloak
+      POSTGRES_USER: keycloak
+      POSTGRES_PASSWORD: local-keycloak-db-password
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U keycloak -d keycloak"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+    volumes:
+      - keycloak_postgres_data:/var/lib/postgresql/data
+
+  keycloak:
+    image: quay.io/keycloak/keycloak:26.0.8
+    command: start-dev --import-realm --hostname=http://keycloak.localhost:8080
+    environment:
+      KC_BOOTSTRAP_ADMIN_USERNAME: local-keycloak-admin
+      KC_BOOTSTRAP_ADMIN_PASSWORD: local-keycloak-admin-password
+      KC_DB: postgres
+      KC_DB_URL_HOST: keycloak-postgres
+      KC_DB_URL_DATABASE: keycloak
+      KC_DB_USERNAME: keycloak
+      KC_DB_PASSWORD: local-keycloak-db-password
+      KC_HEALTH_ENABLED: "true"
+    ports:
+      - "8080:8080"
+    volumes:
+      - ./infra/keycloak:/opt/keycloak/data/import:ro
+    networks:
+      default:
+        aliases:
+          - keycloak.localhost
+    depends_on:
+      keycloak-postgres:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "exec 3<>/dev/tcp/localhost/9000; echo -e 'GET /health/ready HTTP/1.1\\r\\nhost: localhost\\r\\nConnection: close\\r\\n\\r\\n' >&3; grep 'HTTP/1.1 200 OK' <&3"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+
 volumes:
   bun_modules:
   postgres_data:
+  keycloak_postgres_data:

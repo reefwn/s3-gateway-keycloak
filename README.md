@@ -5,11 +5,25 @@ Internal, browser-only S3 object management for approved buckets. The single Nex
 ## Local development
 
 1. Copy the local configuration template: `cp .env.example .env`.
-2. Start the app and PostgreSQL: `docker compose up --build`.
+2. Start the app, app PostgreSQL, Keycloak, and Keycloak PostgreSQL: `docker compose up --build`.
 3. Apply database migrations from another terminal: `docker compose exec app bun --env-file=.env run db:migrate`.
 4. Check readiness: `curl http://localhost:3000/api/health`.
 
 The local app listens on `http://localhost:3000`; PostgreSQL is published on `localhost:5433` to avoid a common local 5432 conflict. The root page redirects to Keycloak, so a working Keycloak client and role mapping are required for interactive use.
+
+Keycloak’s local admin console is `http://keycloak.localhost:8080/admin`. Sign in with username `local-keycloak-admin` and password `local-keycloak-admin-password`.
+
+Use the following local fixture accounts to verify application roles:
+
+| Username | Password | Application role |
+| --- | --- | --- |
+| `s3-readonly` | `local-readonly-password` | `readonly` |
+| `s3-readwrite` | `local-readwrite-password` | `readwrite` |
+| `s3-admin` | `local-admin-password` | `admin` |
+
+The Keycloak admin and fixture-account credentials, plus the values in `.env.example`, are development fixtures only and must never be deployed.
+
+To reset local identity state only (the Keycloak realm, users, and Keycloak PostgreSQL data), run `docker compose down`, then delete only the Keycloak volume with `docker volume rm s3-gateway-keycloak_keycloak_postgres_data`, and restart Compose. This preserves the application PostgreSQL database. Do not use `docker compose down -v` for an identity-only reset: it deletes both the Keycloak and application PostgreSQL volumes.
 
 ## Commands
 
