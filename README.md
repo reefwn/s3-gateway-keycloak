@@ -5,11 +5,13 @@ Internal, browser-only S3 object management for approved buckets. The single Nex
 ## Local development
 
 1. Copy the local configuration template: `cp .env.example .env`.
-2. Start the app, app PostgreSQL, Keycloak, and Keycloak PostgreSQL: `docker compose up --build`.
+2. Start the app, app PostgreSQL, Keycloak, and persistent local Floci S3: `docker compose up --build`.
 3. Apply database migrations from another terminal: `docker compose exec app bun --env-file=.env run db:migrate`.
 4. Check readiness: `curl http://localhost:3000/api/health`.
 
-The local app listens on `http://localhost:3000`; PostgreSQL is published on `localhost:5433` to avoid a common local 5432 conflict. The root page redirects to Keycloak, so a working Keycloak client and role mapping are required for interactive use.
+The local app listens on `http://localhost:3000`; PostgreSQL is published on `localhost:5433` to avoid a common local 5432 conflict. Floci’s S3-compatible endpoint is `http://localhost:4566`. The root page redirects to Keycloak, so a working Keycloak client and role mapping are required for interactive use.
+
+Compose starts Floci with persistent object storage and runs a one-shot initializer before the app. The initializer creates every bucket in `S3_ALLOWED_BUCKETS`, so deployment-local configuration can supply any number of approved buckets without changing source code. Floci object data remains in the `floci_data` Docker volume across normal restarts.
 
 Keycloak’s local admin console is `http://keycloak.localhost:8080/admin`. Sign in with username `local-keycloak-admin` and password `local-keycloak-admin-password`.
 
@@ -25,10 +27,13 @@ The Keycloak admin and fixture-account credentials, plus the values in `.env.exa
 
 To reset local identity state only (the Keycloak realm, users, and Keycloak PostgreSQL data), run `docker compose down`, then delete only the Keycloak volume with `docker volume rm s3-gateway-keycloak_keycloak_postgres_data`, and restart Compose. This preserves the application PostgreSQL database. Do not use `docker compose down -v` for an identity-only reset: it deletes both the Keycloak and application PostgreSQL volumes.
 
+To reset local S3 object state only, run `docker compose down`, delete just the Floci volume with `docker volume rm s3-gateway-keycloak_floci_data`, and restart Compose. Do not use `docker compose down -v` for this: it also deletes the application and Keycloak PostgreSQL volumes.
+
 ## Commands
 
 - `bun run dev` — run the Next.js development server with Webpack.
 - `bun run test` — run Vitest (requires the local PostgreSQL service for database integration tests).
+- `bun run test:s3-integration` — run the real Floci S3 integration test (requires `docker compose up -d`; it always targets local Floci and never AWS).
 - `bun run lint` — run ESLint.
 - `bun run typecheck` — run TypeScript validation.
 - `bun run build` — create the standalone Webpack production build.

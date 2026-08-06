@@ -7,6 +7,9 @@ services:
     environment:
       DATABASE_URL: postgres://s3_browser:s3_browser@postgres:5432/s3_browser
       KEYCLOAK_ISSUER: http://keycloak.localhost:8080/realms/internal
+      S3_ENDPOINT_URL: http://floci:4566
+      S3_ACCESS_KEY_ID: local-floci
+      S3_SECRET_ACCESS_KEY: local-floci-secret
     env_file:
       - .env
     ports:
@@ -19,6 +22,52 @@ services:
         condition: service_healthy
       keycloak:
         condition: service_healthy
+      floci-init:
+        condition: service_completed_successfully
+
+  floci:
+    # floci/floci:latest index digest, verified from Docker Hub on 2026-08-06.
+    image: floci/floci@sha256:690f3077367a866a28509a35bdf1258246bf20b19ec06fcb59093726ee60f7f4
+    environment:
+      FLOCI_STORAGE_MODE: persistent
+      FLOCI_STORAGE_PERSISTENT_PATH: /app/data
+    ports:
+      - "127.0.0.1:4566:4566"
+    volumes:
+      - floci_data:/app/data
+
+  floci-init:
+    # amazon/aws-cli:2.34.44 index digest, verified from Docker Hub on 2026-08-06.
+    image: amazon/aws-cli:2.34.44@sha256:6cabf032082435fe7c6e426fe0870f8b50c7382678b351119cdc283f161561a6
+    entrypoint: ["/bin/sh", "-ec"]
+    command:
+      - >-
+        attempt=0; max_attempts=30;
+        until aws --cli-connect-timeout 1 --cli-read-timeout 1 --endpoint-url "$$S3_ENDPOINT_URL" s3api list-buckets >/dev/null 2>&1; do
+          attempt=$$((attempt + 1));
+          if [ "$$attempt" -ge "$$max_attempts" ]; then
+            echo "Floci S3 ListBuckets did not become ready after $${max_attempts} attempts" >&2;
+            exit 1;
+          fi;
+          sleep 1;
+        done;
+        for bucket in $$(echo "$$S3_ALLOWED_BUCKETS" | tr ',' ' '); do
+          aws --endpoint-url "$$S3_ENDPOINT_URL" s3api head-bucket --bucket "$$bucket" 2>/dev/null ||
+          if [ "$$AWS_DEFAULT_REGION" = "us-east-1" ]; then
+            aws --endpoint-url "$$S3_ENDPOINT_URL" s3api create-bucket --bucket "$$bucket";
+          else
+            aws --endpoint-url "$$S3_ENDPOINT_URL" s3api create-bucket --bucket "$$bucket" --create-bucket-configuration "LocationConstraint=$$AWS_DEFAULT_REGION";
+          fi;
+        done
+    environment:
+      AWS_DEFAULT_REGION: ${S3_REGION}
+      AWS_ACCESS_KEY_ID: local-floci
+      AWS_SECRET_ACCESS_KEY: local-floci-secret
+      S3_ENDPOINT_URL: http://floci:4566
+      S3_ALLOWED_BUCKETS: ${S3_ALLOWED_BUCKETS}
+    depends_on:
+      floci:
+        condition: service_started
 
   postgres:
     image: postgres:17-alpine
@@ -81,5 +130,6 @@ services:
 
 volumes:
   bun_modules:
+  floci_data:
   postgres_data:
   keycloak_postgres_data:

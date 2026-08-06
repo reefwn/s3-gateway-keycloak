@@ -36,6 +36,92 @@ describe("loadConfig", () => {
     }).keycloakIssuer).toBe("http://keycloak.localhost:8080/realms/internal");
   });
 
+  it("accepts complete local Floci configuration only in local mode", () => {
+    expect(loadConfig({
+      ...validEnvironment,
+      S3_ENDPOINT_URL: "http://floci:4566",
+      S3_ACCESS_KEY_ID: "local-floci",
+      S3_SECRET_ACCESS_KEY: "local-floci-secret"
+    }).localS3).toEqual({
+      endpointUrl: "http://floci:4566",
+      accessKeyId: "local-floci",
+      secretAccessKey: "local-floci-secret"
+    });
+  });
+
+  it("returns no local S3 configuration when local settings are absent", () => {
+    expect(loadConfig(validEnvironment).localS3).toBeNull();
+  });
+
+  it("rejects a local S3 endpoint without local credentials", () => {
+    expect(() => loadConfig({
+      ...validEnvironment,
+      S3_ENDPOINT_URL: "http://floci:4566"
+    })).toThrow(/S3_ENDPOINT_URL.*S3_ACCESS_KEY_ID.*S3_SECRET_ACCESS_KEY/i);
+  });
+
+  it("rejects a local S3 endpoint with only an access key", () => {
+    expect(() => loadConfig({
+      ...validEnvironment,
+      S3_ENDPOINT_URL: "http://floci:4566",
+      S3_ACCESS_KEY_ID: "local-floci"
+    })).toThrow(/S3_ENDPOINT_URL.*S3_ACCESS_KEY_ID.*S3_SECRET_ACCESS_KEY/i);
+  });
+
+  it("rejects a local S3 endpoint with only a secret key", () => {
+    expect(() => loadConfig({
+      ...validEnvironment,
+      S3_ENDPOINT_URL: "http://floci:4566",
+      S3_SECRET_ACCESS_KEY: "local-floci-secret"
+    })).toThrow(/S3_ENDPOINT_URL.*S3_ACCESS_KEY_ID.*S3_SECRET_ACCESS_KEY/i);
+  });
+
+  it.each([
+    ["endpoint", { S3_ENDPOINT_URL: "", S3_ACCESS_KEY_ID: "local-floci", S3_SECRET_ACCESS_KEY: "local-floci-secret" }],
+    ["access key", { S3_ENDPOINT_URL: "http://floci:4566", S3_ACCESS_KEY_ID: "", S3_SECRET_ACCESS_KEY: "local-floci-secret" }],
+    ["secret key", { S3_ENDPOINT_URL: "http://floci:4566", S3_ACCESS_KEY_ID: "local-floci", S3_SECRET_ACCESS_KEY: "" }]
+  ])("rejects an empty local S3 %s value", (_valueName, localS3) => {
+    expect(() => loadConfig({ ...validEnvironment, ...localS3 }))
+      .toThrow(/S3_ENDPOINT_URL.*S3_ACCESS_KEY_ID.*S3_SECRET_ACCESS_KEY/i);
+  });
+
+  it("rejects local S3 credentials without an endpoint", () => {
+    expect(() => loadConfig({
+      ...validEnvironment,
+      S3_ACCESS_KEY_ID: "local-floci",
+      S3_SECRET_ACCESS_KEY: "local-floci-secret"
+    })).toThrow(/S3_ENDPOINT_URL.*S3_ACCESS_KEY_ID.*S3_SECRET_ACCESS_KEY/i);
+  });
+
+  it("rejects a malformed local S3 endpoint", () => {
+    expect(() => loadConfig({
+      ...validEnvironment,
+      S3_ENDPOINT_URL: "not-a-url",
+      S3_ACCESS_KEY_ID: "local-floci",
+      S3_SECRET_ACCESS_KEY: "local-floci-secret"
+    })).toThrow(/S3_ENDPOINT_URL/);
+  });
+
+  it("rejects local S3 endpoint settings outside local development", () => {
+    expect(() => loadConfig({
+      ...validEnvironment,
+      APP_ENVIRONMENT: "deployment",
+      NEXTAUTH_URL: "https://s3.internal.example",
+      S3_ENDPOINT_URL: "http://floci:4566",
+      S3_ACCESS_KEY_ID: "local-floci",
+      S3_SECRET_ACCESS_KEY: "local-floci-secret"
+    })).toThrow(/S3_ENDPOINT_URL.*local/i);
+  });
+
+  it("rejects explicitly empty local S3 settings outside local development", () => {
+    expect(() => loadConfig({
+      ...validEnvironment,
+      APP_ENVIRONMENT: "deployment",
+      NEXTAUTH_URL: "https://s3.internal.example",
+      S3_ENDPOINT_URL: ""
+    })).toThrow(/S3_ENDPOINT_URL.*local/i);
+  });
+
   it("rejects a non-local HTTP Keycloak issuer", () => {
     const environment = {
       ...validEnvironment,
