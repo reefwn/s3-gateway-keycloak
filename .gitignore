@@ -1,0 +1,10 @@
+node_modules
+.next
+.env
+coverage
+*.tsbuildinfo
+.agents/
+.claude/
+.codex/
+.impeccable/
+.mcp.json
