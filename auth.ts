@@ -8,6 +8,9 @@ export function getAuthOptions(): NextAuthOptions {
   const config = loadConfig();
 
   return {
+    pages: {
+      signIn: "/sign-in",
+    },
     providers: [
       KeycloakProvider({
         clientId: config.keycloakClientId,

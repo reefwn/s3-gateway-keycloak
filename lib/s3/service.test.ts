@@ -34,6 +34,21 @@ describe("S3 service", () => {
     expect(send).toHaveBeenLastCalledWith(expect.any(ListObjectsV2Command));
   });
 
+  it("asks S3 for immediate prefixes so folder markers are not listed as objects", async () => {
+    send.mockResolvedValueOnce({ CommonPrefixes: [{ Prefix: "hello/" }] });
+
+    await expect(service.listObjects("reports", "", undefined)).resolves.toMatchObject({
+      objects: [],
+      prefixes: ["hello/"],
+    });
+
+    expect((send.mock.calls.at(-1)?.[0] as ListObjectsV2Command).input).toMatchObject({
+      Bucket: "reports",
+      Delimiter: "/",
+      Prefix: "",
+    });
+  });
+
   it("streams downloads as attachments with no-sniff headers", async () => {
     const body = Readable.from("report");
     send.mockResolvedValueOnce({ Body: body, ContentType: "application/pdf", ContentLength: 6 });

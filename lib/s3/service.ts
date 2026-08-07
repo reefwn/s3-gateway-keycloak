@@ -58,7 +58,7 @@ export function createS3Service(input: Readonly<{
     async listObjects(bucket: string, prefix: string, continuationToken: string | undefined) {
       assertAllowedBucket(bucket);
       const output = await input.client.send(
-        new ListObjectsV2Command({ Bucket: bucket, Prefix: prefix, ContinuationToken: continuationToken })
+        new ListObjectsV2Command({ Bucket: bucket, Prefix: prefix, Delimiter: "/", ContinuationToken: continuationToken })
       );
 
       return {
