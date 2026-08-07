@@ -1,0 +1,7 @@
+apiVersion: v2
+name: s3-browser
+description: Internal S3 Browser with PostgreSQL audit storage
+type: application
+version: 0.1.0
+appVersion: "1.0.1"
+kubeVersion: ">=1.27.0-0"

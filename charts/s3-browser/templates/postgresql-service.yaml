@@ -1,0 +1,15 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "s3-browser.postgresqlFullname" . }}
+  labels:
+    {{- include "s3-browser.labels" . | nindent 4 }}
+spec:
+  clusterIP: None
+  ports:
+    - name: postgresql
+      port: 5432
+      protocol: TCP
+      targetPort: postgresql
+  selector:
+    {{- include "s3-browser.postgresqlSelectorLabels" . | nindent 4 }}

@@ -1,0 +1,106 @@
+image:
+  repository: reefwn/s3-gateway-keycloak
+  tag: v1.0.1
+  pullPolicy: IfNotPresent
+
+imagePullSecrets: []
+
+existingSecret:
+  name: ""
+
+serviceAccount:
+  create: true
+  name: ""
+  annotations: {}
+
+app:
+  replicaCount: 1
+  nextAuthUrl: https://s3-browser.internal.example
+  keycloakIssuer: https://keycloak.internal.example/realms/internal
+  keycloakClientId: s3-browser
+  s3Region: ap-southeast-7
+  allowedBuckets: reports,uploads
+  roleClaim: resource_access.s3-browser.roles
+  roleMapping: '{"s3-browser-admin":"admin","s3-browser-readwrite":"readwrite","s3-browser-readonly":"readonly"}'
+  objectMaxBytes: 524288000
+  transferLimit: 5
+  archiveMaxObjects: 1000
+  archiveMaxBytes: 2147483648
+  podAnnotations: {}
+  podLabels: {}
+  podSecurityContext:
+    fsGroup: 10001
+    seccompProfile:
+      type: RuntimeDefault
+  securityContext:
+    allowPrivilegeEscalation: false
+    capabilities:
+      drop:
+        - ALL
+    readOnlyRootFilesystem: true
+    runAsNonRoot: true
+    runAsUser: 10001
+    runAsGroup: 10001
+  resources:
+    requests:
+      cpu: 100m
+      memory: 256Mi
+    limits:
+      cpu: 1000m
+      memory: 1Gi
+  service:
+    type: ClusterIP
+    port: 80
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxUnavailable: 0
+      maxSurge: 1
+
+postgresql:
+  image:
+    repository: postgres
+    tag: 17-alpine
+    pullPolicy: IfNotPresent
+  resources:
+    requests:
+      cpu: 100m
+      memory: 256Mi
+    limits:
+      cpu: 1000m
+      memory: 1Gi
+  persistence:
+    accessModes:
+      - ReadWriteOnce
+    size: 10Gi
+    storageClass: ""
+  podSecurityContext:
+    fsGroup: 999
+    seccompProfile:
+      type: RuntimeDefault
+  securityContext:
+    allowPrivilegeEscalation: false
+    capabilities:
+      drop:
+        - ALL
+    runAsNonRoot: true
+    runAsUser: 999
+    runAsGroup: 999
+
+migration:
+  resources:
+    requests:
+      cpu: 100m
+      memory: 256Mi
+    limits:
+      cpu: 1000m
+      memory: 1Gi
+
+ingress:
+  enabled: false
+  className: ""
+  annotations: {}
+  host: ""
+  path: /
+  pathType: Prefix
+  tlsSecretName: ""

@@ -51,6 +51,75 @@ All configuration is deployment-supplied; source code does not name environments
 
 Static AWS credentials are deliberately rejected at startup. The deployed service must use the AWS SDK default IRSA credential chain.
 
+## Kubernetes deployment
+
+The Helm chart in `charts/s3-browser` deploys the application, a single
+PostgreSQL StatefulSet, a migration gate, and a retained PostgreSQL PVC. It
+does not create Keycloak, HTTPS ingress/certificates, S3 buckets or policies,
+an IRSA IAM role, storage classes/PVs, backups, or Kubernetes Secrets.
+
+Build and publish the production image before installing the chart:
+
+```sh
+docker build -t reefwn/s3-gateway-keycloak:v1.0.1 .
+docker push reefwn/s3-gateway-keycloak:v1.0.1
+sh scripts/verify-production-image.sh
+```
+
+The chart requires a pre-created secret. Keep every value in a protected
+secret-management workflow or a local, access-restricted file; do not add
+these files to Git. The secret must include `POSTGRES_DB`, `POSTGRES_USER`,
+`POSTGRES_PASSWORD`, `DATABASE_URL`, `NEXTAUTH_SECRET`, and
+`KEYCLOAK_CLIENT_SECRET`.
+
+For example, create the files with your approved secret-management tooling,
+then create the Kubernetes Secret:
+
+```sh
+kubectl create namespace s3-browser
+kubectl -n s3-browser create secret generic deployment-secrets \
+  --from-literal=POSTGRES_DB=s3_browser \
+  --from-literal=POSTGRES_USER=s3_browser \
+  --from-file=POSTGRES_PASSWORD=./postgres-password \
+  --from-file=DATABASE_URL=./database-url \
+  --from-file=NEXTAUTH_SECRET=./nextauth-secret \
+  --from-file=KEYCLOAK_CLIENT_SECRET=./keycloak-client-secret
+```
+
+`database-url` must be a complete PostgreSQL URL using the release database
+service. For a release named `s3-browser` in the `s3-browser` namespace, the
+host is `s3-browser-postgresql.s3-browser.svc.cluster.local:5432`. Percent
+encode reserved password characters in the URL; the chart intentionally does
+not construct `DATABASE_URL` from separate fields.
+
+Copy the credential-free example and replace its representative URLs, bucket
+allowlist, storage class, IRSA annotation, and optional ingress values:
+
+```sh
+cp charts/s3-browser/values-production.example.yaml values-production.yaml
+helm upgrade --install s3-browser ./charts/s3-browser \
+  --namespace s3-browser \
+  --create-namespace \
+  --wait \
+  --timeout 10m \
+  --values values-production.yaml
+```
+
+Each new application pod runs `bun run db:migrate` in an init container before
+the application container can start. Kubernetes retries the init container
+until PostgreSQL is reachable and migration succeeds. `--wait --timeout 10m`
+causes Helm to return failure if the new pod cannot become ready. Investigate a
+blocked migration with the init-container logs:
+
+```sh
+kubectl -n s3-browser get pods -l app.kubernetes.io/instance=s3-browser
+kubectl -n s3-browser logs deployment/s3-browser -c migrate
+```
+
+PostgreSQL PVCs are retained across upgrades, scale-down, and Helm uninstall.
+Review and document any data deletion outside this application before manually
+removing the retained PVC.
+
 ## Application behavior
 
 - `readonly` can browse and download; `readwrite` can also upload and create prefix markers; `admin` can additionally delete individual objects after typing the exact key.

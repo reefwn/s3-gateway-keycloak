@@ -1,0 +1,19 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "s3-browser.fullname" . }}
+  labels:
+    {{- include "s3-browser.labels" . | nindent 4 }}
+data:
+  APP_ENVIRONMENT: deployment
+  NEXTAUTH_URL: {{ .Values.app.nextAuthUrl | quote }}
+  KEYCLOAK_ISSUER: {{ .Values.app.keycloakIssuer | quote }}
+  KEYCLOAK_CLIENT_ID: {{ .Values.app.keycloakClientId | quote }}
+  S3_REGION: {{ .Values.app.s3Region | quote }}
+  S3_ALLOWED_BUCKETS: {{ .Values.app.allowedBuckets | quote }}
+  S3_ROLE_CLAIM: {{ .Values.app.roleClaim | quote }}
+  S3_ROLE_MAPPING: {{ .Values.app.roleMapping | quote }}
+  S3_OBJECT_MAX_BYTES: {{ printf "%.0f" (.Values.app.objectMaxBytes | float64) | quote }}
+  S3_TRANSFER_LIMIT: {{ printf "%.0f" (.Values.app.transferLimit | float64) | quote }}
+  S3_ARCHIVE_MAX_OBJECTS: {{ printf "%.0f" (.Values.app.archiveMaxObjects | float64) | quote }}
+  S3_ARCHIVE_MAX_BYTES: {{ printf "%.0f" (.Values.app.archiveMaxBytes | float64) | quote }}

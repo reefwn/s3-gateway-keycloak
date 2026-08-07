@@ -1,0 +1,122 @@
+{
+  "$schema": "https://json-schema.org/draft-07/schema#",
+  "type": "object",
+  "required": ["existingSecret", "app", "postgresql"],
+  "properties": {
+    "existingSecret": {
+      "type": "object",
+      "required": ["name"],
+      "properties": {
+        "name": {
+          "type": "string",
+          "minLength": 1
+        }
+      }
+    },
+    "app": {
+      "type": "object",
+      "required": [
+        "nextAuthUrl",
+        "keycloakIssuer",
+        "keycloakClientId",
+        "s3Region",
+        "allowedBuckets",
+        "roleClaim",
+        "roleMapping",
+        "objectMaxBytes",
+        "transferLimit",
+        "archiveMaxObjects",
+        "archiveMaxBytes",
+        "service"
+      ],
+      "properties": {
+        "nextAuthUrl": {
+          "type": "string",
+          "pattern": "^https://"
+        },
+        "keycloakIssuer": {
+          "type": "string",
+          "pattern": "^https://"
+        },
+        "keycloakClientId": {
+          "type": "string",
+          "minLength": 1
+        },
+        "s3Region": {
+          "type": "string",
+          "minLength": 1
+        },
+        "allowedBuckets": {
+          "type": "string",
+          "pattern": "\\S"
+        },
+        "roleClaim": {
+          "type": "string",
+          "minLength": 1
+        },
+        "roleMapping": {
+          "type": "string",
+          "minLength": 1
+        },
+        "objectMaxBytes": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "transferLimit": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "archiveMaxObjects": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "archiveMaxBytes": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "service": {
+          "type": "object",
+          "required": ["type", "port"],
+          "properties": {
+            "type": {
+              "type": "string",
+              "enum": ["ClusterIP", "LoadBalancer"]
+            },
+            "port": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 65535
+            }
+          }
+        }
+      }
+    },
+    "postgresql": {
+      "type": "object",
+      "required": ["persistence"],
+      "properties": {
+        "persistence": {
+          "type": "object",
+          "required": ["accessModes", "size"],
+          "properties": {
+            "accessModes": {
+              "type": "array",
+              "minItems": 1,
+              "items": {
+                "type": "string",
+                "minLength": 1
+              }
+            },
+            "size": {
+              "type": "string",
+              "pattern": "^[1-9][0-9]*(Ki|Mi|Gi|Ti|Pi|Ei)$"
+            },
+            "storageClass": {
+              "type": "string"
+            }
+          }
+        }
+      }
+    }
+  }
+}
