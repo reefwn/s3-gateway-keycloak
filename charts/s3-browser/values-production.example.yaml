@@ -1,0 +1,16 @@
+existingSecret:
+  name: deployment-secrets
+
+serviceAccount:
+  annotations:
+    eks.amazonaws.com/role-arn: arn:aws:iam::123456789012:role/s3-browser
+
+app:
+  nextAuthUrl: https://s3-browser.internal.example
+  keycloakIssuer: https://keycloak.internal.example/realms/internal
+  allowedBuckets: reports,uploads
+
+postgresql:
+  persistence:
+    storageClass: gp3
+    size: 20Gi
