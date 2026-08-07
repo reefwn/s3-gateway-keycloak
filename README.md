@@ -58,4 +58,15 @@ Static AWS credentials are deliberately rejected at startup. The deployed servic
 - All S3 actions write an append-only attempt event and outcome event to PostgreSQL. If the attempt cannot be stored, the action is denied.
 - Authenticated pages, APIs, and downloads use `Cache-Control: no-store`; object downloads are attachment-only and `nosniff`.
 
+## Operator index interface
+
+The application-owned sign-in page starts the Keycloak flow; Keycloak continues to host credential entry. After authentication, the Operator index keeps daily object operations in one workspace:
+
+- Select an approved bucket from the persistent bucket index, then navigate prefixes with breadcrumbs or the parent action.
+- Use the finder to filter the current prefix locally by folder or object name. Folder rows always precede object rows.
+- Role-gated upload, prefix creation, and deletion controls appear only after a bucket is selected. The same server-side authorization rules remain authoritative.
+- Refresh the current prefix or download it as a ZIP without leaving the workspace. Browser request failures show generic retry guidance instead of transport details.
+
+For a local visual check, authenticate with one of the fixture accounts above, select a bucket, and verify the role-specific controls and object navigation. Manual upload testing should be performed in a normal browser session; automated Chrome-debug sessions can terminate renderer file-upload requests before they reach the application.
+
 Infrastructure-managed prerequisites—HTTPS/internal ingress, IRSA role and least-privilege bucket policy, managed PostgreSQL backup/recovery, Keycloak client administration, and audit retention review—remain outside this application repository.
