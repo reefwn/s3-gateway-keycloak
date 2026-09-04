@@ -34,14 +34,18 @@ describe("actorFromProfile", () => {
     ).toEqual({ sub: "user-123", username: "alex", email: "alex@example.test", role: "admin" });
   });
 
-  it("returns null when a profile is missing identity or an unambiguous role", () => {
+  it("returns null when a profile is missing identity or any mapped role", () => {
     expect(actorFromProfile({ sub: "user-123" }, "roles", mapping)).toBeNull();
+    expect(actorFromProfile({ sub: "user-123", roles: ["unrelated"] }, "roles", mapping)).toBeNull();
+  });
+
+  it("creates an actor with the highest-privilege role when a profile holds multiple", () => {
     expect(
       actorFromProfile(
-        { sub: "user-123", roles: ["s3-browser-admin", "s3-browser-readonly"] },
+        { sub: "user-123", preferred_username: "alex", roles: ["s3-browser-admin", "s3-browser-readonly"] },
         "roles",
         mapping
       )
-    ).toBeNull();
+    ).toEqual({ sub: "user-123", username: "alex", email: null, role: "admin" });
   });
 });

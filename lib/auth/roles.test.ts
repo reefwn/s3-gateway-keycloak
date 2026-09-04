@@ -18,8 +18,22 @@ describe("resolveRole", () => {
     expect(resolveRole(["unrelated"], roleMapping)).toBeNull();
   });
 
-  it("rejects an ambiguous role claim", () => {
-    expect(resolveRole(["s3-browser-admin", "s3-browser-readonly"], roleMapping)).toBeNull();
+  it("resolves to the highest-privilege role when multiple roles match", () => {
+    expect(resolveRole(["s3-browser-admin", "s3-browser-readonly"], roleMapping)).toBe("admin");
+    // Order in the claim shouldn't matter — same pair, reversed.
+    expect(resolveRole(["s3-browser-readonly", "s3-browser-admin"], roleMapping)).toBe("admin");
+    expect(resolveRole(["s3-browser-readwrite", "s3-browser-admin"], roleMapping)).toBe("admin");
+    expect(resolveRole(["s3-browser-readonly", "s3-browser-readwrite"], roleMapping)).toBe("readwrite");
+  });
+
+  it("resolves to admin when a user holds all three roles", () => {
+    expect(
+      resolveRole(["s3-browser-readonly", "s3-browser-readwrite", "s3-browser-admin"], roleMapping)
+    ).toBe("admin");
+  });
+
+  it("ignores unmapped roles when resolving among multiple matches", () => {
+    expect(resolveRole(["unrelated", "s3-browser-readwrite", "s3-browser-admin"], roleMapping)).toBe("admin");
   });
 });
 
