@@ -9,6 +9,11 @@ app:
   nextAuthUrl: https://s3-browser.internal.example
   keycloakIssuer: https://keycloak.internal.example/realms/internal
   allowedBuckets: reports,uploads
+  # If nextAuthUrl above must be http:// — e.g. deployed behind an internal
+  # service mesh / gateway that only exposes HTTP inside a private network —
+  # uncomment this. Leave it unset (or false) for any deployment reachable
+  # from outside a trusted internal network.
+  # allowInsecureHttp: true
 
 postgresql:
   persistence:

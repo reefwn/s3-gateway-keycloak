@@ -155,6 +155,43 @@ describe("loadConfig", () => {
     expect(() => loadConfig(environment)).toThrow(/HTTPS/);
   });
 
+  it("allows a non-local HTTP application origin when ALLOW_INSECURE_HTTP is true", () => {
+    const environment = {
+      ...validEnvironment,
+      APP_ENVIRONMENT: "deployment",
+      NEXTAUTH_URL: "http://s3-browser.internal.example",
+      KEYCLOAK_ISSUER: "https://keycloak.internal.example/realms/internal",
+      ALLOW_INSECURE_HTTP: "true"
+    };
+
+    expect(loadConfig(environment)).toMatchObject({
+      applicationOrigin: "http://s3-browser.internal.example",
+      allowsInsecureHttp: true
+    });
+  });
+
+  it("defaults ALLOW_INSECURE_HTTP to false when unset", () => {
+    expect(loadConfig(validEnvironment).allowsInsecureHttp).toBe(false);
+  });
+
+  it("still requires HTTPS for the Keycloak issuer even when ALLOW_INSECURE_HTTP is true", () => {
+    const environment = {
+      ...validEnvironment,
+      APP_ENVIRONMENT: "deployment",
+      NEXTAUTH_URL: "http://s3-browser.internal.example",
+      KEYCLOAK_ISSUER: "http://keycloak.internal.example/realms/internal",
+      ALLOW_INSECURE_HTTP: "true"
+    };
+
+    expect(() => loadConfig(environment)).toThrow(/KEYCLOAK_ISSUER.*HTTPS/);
+  });
+
+  it("rejects an invalid ALLOW_INSECURE_HTTP value", () => {
+    const environment = { ...validEnvironment, ALLOW_INSECURE_HTTP: "yes" };
+
+    expect(() => loadConfig(environment)).toThrow(/ALLOW_INSECURE_HTTP/);
+  });
+
   it("rejects malformed role mapping JSON", () => {
     const environment = { ...validEnvironment, S3_ROLE_MAPPING: "not-json" };
 

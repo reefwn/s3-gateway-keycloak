@@ -44,12 +44,24 @@ To reset local S3 object state only, run `docker compose down`, delete just the 
 All configuration is deployment-supplied; source code does not name environments or buckets. Required variables are listed in `.env.example`:
 
 - Keycloak issuer/client/secret and a 32+ character `NEXTAUTH_SECRET`.
-- An exact `NEXTAUTH_URL` origin (HTTPS except local development).
+- An exact `NEXTAUTH_URL` origin (HTTPS except local development, or when
+  `ALLOW_INSECURE_HTTP=true` — see below).
 - PostgreSQL `DATABASE_URL`.
 - S3 region, comma-separated bucket allowlist, Keycloak claim path, and role mapping JSON.
 - Optional object, transfer, and archive limits; defaults are 500 MiB, five uploads/downloads per actor, 1,000 objects, and 2 GiB uncompressed archive size.
 
 Static AWS credentials are deliberately rejected at startup. The deployed service must use the AWS SDK default IRSA credential chain.
+
+`NEXTAUTH_URL` must be HTTPS outside local development by default. Set
+`ALLOW_INSECURE_HTTP=true` to opt out of that requirement for deployments
+that sit entirely behind a trusted internal network — for example, a service
+mesh or gateway that only exposes the app over HTTP internally and never
+routes it to the public internet. This is a narrow, explicit override: it
+does not affect the Keycloak issuer check, which always requires HTTPS
+outside local development regardless of this flag, and it also disables
+NextAuth's `secure` cookie attribute (otherwise the browser silently drops
+session cookies over plain HTTP). Do not set this for any deployment
+reachable from outside a trusted internal network.
 
 ## Kubernetes deployment
 
