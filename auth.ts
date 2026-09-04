@@ -7,9 +7,31 @@ import { actorFromProfile } from "@/lib/auth/session";
 export function getAuthOptions(): NextAuthOptions {
   const config = loadConfig();
 
+  // NextAuth infers cookie `secure` from whether NEXTAUTH_URL is HTTPS. When
+  // ALLOW_INSECURE_HTTP is set for a trusted internal-network deployment (see
+  // lib/config.ts), NEXTAUTH_URL is intentionally HTTP, so that inference
+  // would otherwise mark the session/callback cookies `secure: true` and the
+  // browser would silently drop them — sign-in would appear to succeed but
+  // never actually authenticate. Override explicitly to keep behavior
+  // consistent with the HTTPS check we already relaxed.
+  const useSecureCookies = !config.allowsInsecureHttp && !config.isLocalDevelopment;
+  const cookiePrefix = useSecureCookies ? "__Secure-" : "";
+
   return {
     pages: {
       signIn: "/sign-in",
+    },
+    useSecureCookies,
+    cookies: {
+      sessionToken: {
+        name: `${cookiePrefix}next-auth.session-token`,
+        options: {
+          httpOnly: true,
+          sameSite: "lax",
+          path: "/",
+          secure: useSecureCookies
+        }
+      }
     },
     providers: [
       KeycloakProvider({

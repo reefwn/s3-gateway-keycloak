@@ -17,6 +17,7 @@ const rawConfigSchema = z.object({
   S3_ROLE_CLAIM: z.string().min(1),
   S3_ROLE_MAPPING: z.string().min(1),
   APP_ENVIRONMENT: z.enum(["local", "deployment"]).default("deployment"),
+  ALLOW_INSECURE_HTTP: z.enum(["true", "false"]).default("false"),
   S3_OBJECT_MAX_BYTES: z.coerce.number().int().positive().default(MAX_OBJECT_BYTES),
   S3_TRANSFER_LIMIT: z.coerce.number().int().min(1).default(5),
   S3_ARCHIVE_MAX_OBJECTS: z.coerce.number().int().min(1).default(1000),
@@ -43,6 +44,7 @@ export type AppConfig = Readonly<{
   roleClaim: string;
   roleMapping: Readonly<Record<string, AppRole>>;
   isLocalDevelopment: boolean;
+  allowsInsecureHttp: boolean;
   localS3: {
     endpointUrl: string;
     accessKeyId: string;
@@ -133,9 +135,19 @@ export function loadConfig(environment: Record<string, string | undefined> = pro
 
   const applicationUrl = new URL(raw.NEXTAUTH_URL);
   const keycloakIssuerUrl = new URL(raw.KEYCLOAK_ISSUER);
+  const allowsInsecureHttp = raw.ALLOW_INSECURE_HTTP === "true";
 
-  if (raw.APP_ENVIRONMENT !== "local" && applicationUrl.protocol !== "https:") {
-    throw new Error("NEXTAUTH_URL must use HTTPS outside local development");
+  // HTTPS is required by default outside local development. ALLOW_INSECURE_HTTP
+  // is a narrow, explicit opt-out for deployments that terminate TLS elsewhere
+  // (e.g. an internal service mesh / gateway that only exposes HTTP inside a
+  // private network) — it must be set deliberately by the operator, never
+  // inferred, and it affects only the application's own origin. The Keycloak
+  // issuer is a separate trust boundary (the identity provider) and always
+  // requires HTTPS outside local development, regardless of this flag.
+  if (raw.APP_ENVIRONMENT !== "local" && !allowsInsecureHttp && applicationUrl.protocol !== "https:") {
+    throw new Error(
+      "NEXTAUTH_URL must use HTTPS outside local development (set ALLOW_INSECURE_HTTP=true to override for a trusted internal network)"
+    );
   }
 
   if (raw.APP_ENVIRONMENT !== "local" && keycloakIssuerUrl.protocol !== "https:") {
@@ -154,6 +166,7 @@ export function loadConfig(environment: Record<string, string | undefined> = pro
     roleClaim: raw.S3_ROLE_CLAIM,
     roleMapping: Object.freeze(parseRoleMapping(raw.S3_ROLE_MAPPING)),
     isLocalDevelopment: raw.APP_ENVIRONMENT === "local",
+    allowsInsecureHttp,
     localS3,
     objectMaxBytes: raw.S3_OBJECT_MAX_BYTES,
     transferLimit: raw.S3_TRANSFER_LIMIT,

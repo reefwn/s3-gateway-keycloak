@@ -87,4 +87,22 @@ describe("s3-browser chart", () => {
     expect(result.status, result.stderr).toBe(0);
     expect(result.stdout).toContain("name: deployment-secrets");
   });
+
+  it("defaults ALLOW_INSECURE_HTTP to false in the ConfigMap", () => {
+    const result = render();
+
+    expect(result.status, result.stderr).toBe(0);
+
+    const configMap = sourceManifest(result.stdout, "configmap.yaml");
+    expect(configMap).toContain('ALLOW_INSECURE_HTTP: "false"');
+  });
+
+  it("passes ALLOW_INSECURE_HTTP through to the ConfigMap when set", () => {
+    const result = render(["--set", "app.allowInsecureHttp=true"]);
+
+    expect(result.status, result.stderr).toBe(0);
+
+    const configMap = sourceManifest(result.stdout, "configmap.yaml");
+    expect(configMap).toContain('ALLOW_INSECURE_HTTP: "true"');
+  });
 });

@@ -6,6 +6,7 @@ metadata:
     {{- include "s3-browser.labels" . | nindent 4 }}
 data:
   APP_ENVIRONMENT: deployment
+  ALLOW_INSECURE_HTTP: {{ .Values.app.allowInsecureHttp | quote }}
   NEXTAUTH_URL: {{ .Values.app.nextAuthUrl | quote }}
   KEYCLOAK_ISSUER: {{ .Values.app.keycloakIssuer | quote }}
   KEYCLOAK_CLIENT_ID: {{ .Values.app.keycloakClientId | quote }}

@@ -18,6 +18,11 @@ app:
   nextAuthUrl: https://s3-browser.internal.example
   keycloakIssuer: https://keycloak.internal.example/realms/internal
   keycloakClientId: s3-browser
+  # Allows nextAuthUrl to be http:// instead of https://, for deployments
+  # behind an internal service mesh / gateway that only exposes HTTP inside
+  # a private network (TLS is terminated or intentionally absent upstream).
+  # Defaults to false — HTTPS is required unless explicitly opted out.
+  allowInsecureHttp: false
   s3Region: ap-southeast-7
   allowedBuckets: reports,uploads
   roleClaim: resource_access.s3-browser.roles
