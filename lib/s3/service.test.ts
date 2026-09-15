@@ -1,16 +1,27 @@
 // @vitest-environment node
 
-import { GetObjectCommand, ListObjectsV2Command, PutObjectCommand } from "@aws-sdk/client-s3";
+import { GetObjectCommand, HeadObjectCommand, ListObjectsV2Command, PutObjectCommand } from "@aws-sdk/client-s3";
 import { Readable } from "node:stream";
-import { describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 
-import { AllowedBucketError, ArchiveLimitError, ObjectTooLargeError, createS3Service } from "@/lib/s3/service";
+import {
+  AllowedBucketError,
+  ArchiveLimitError,
+  InvalidArchiveSelectionError,
+  ObjectTooLargeError,
+  PreviewNotSupportedError,
+  createS3Service
+} from "@/lib/s3/service";
 
 const send = vi.fn();
 const service = createS3Service({
   client: { send },
   allowedBuckets: ["reports"],
   objectMaxBytes: 500 * 1024 * 1024
+});
+
+beforeEach(() => {
+  send.mockReset();
 });
 
 describe("S3 service", () => {
@@ -27,7 +38,7 @@ describe("S3 service", () => {
     });
 
     await expect(service.listObjects("reports", "reports/", "current")).resolves.toEqual({
-      objects: [{ key: "reports/january.pdf", size: 12, lastModified: new Date("2026-01-01") }],
+      objects: [{ key: "reports/january.pdf", size: 12, lastModified: "2026-01-01T00:00:00.000Z" }],
       prefixes: ["reports/"],
       nextContinuationToken: "next"
     });
@@ -100,6 +111,159 @@ describe("S3 service", () => {
 
     expect(archive.objectCount).toBe(1);
     expect(archive.totalSize).toBe(6);
+
+    const chunks: Buffer[] = [];
+    for await (const chunk of archive.stream) chunks.push(Buffer.from(chunk));
+    expect(Buffer.concat(chunks).length).toBeGreaterThan(0);
+  });
+
+  it("searches full keys across pages case-insensitively and flags a page bound", async () => {
+    const bounded = createS3Service({
+      client: { send },
+      allowedBuckets: ["reports"],
+      objectMaxBytes: 1,
+      searchMaxResults: 5,
+      searchMaxPages: 1
+    });
+    send.mockResolvedValueOnce({ Contents: [{ Key: "2026/Annual-REPORT.pdf", Size: 8 }], NextContinuationToken: "next" });
+
+    await expect(bounded.searchObjects("reports", "report")).resolves.toEqual({
+      objects: [{ key: "2026/Annual-REPORT.pdf", size: 8, lastModified: undefined }],
+      truncated: true
+    });
+    expect((send.mock.calls[0][0] as ListObjectsV2Command).input).not.toHaveProperty("Delimiter");
+  });
+
+  it("searches full keys across configured pages", async () => {
+    const bounded = createS3Service({
+      client: { send },
+      allowedBuckets: ["reports"],
+      objectMaxBytes: 1,
+      searchMaxResults: 5,
+      searchMaxPages: 2
+    });
+    send.mockResolvedValueOnce({ Contents: [{ Key: "2026/Annual-REPORT.pdf", Size: 8 }], NextContinuationToken: "next" });
+    send.mockResolvedValueOnce({ Contents: [{ Key: "2026/summary.txt", Size: 3 }, { Key: "2025/Report.csv", Size: 2 }] });
+
+    await expect(bounded.searchObjects("reports", " report ")).resolves.toEqual({
+      objects: [
+        { key: "2026/Annual-REPORT.pdf", size: 8, lastModified: undefined },
+        { key: "2025/Report.csv", size: 2, lastModified: undefined }
+      ],
+      truncated: false
+    });
+    expect((send.mock.calls[1][0] as ListObjectsV2Command).input).toMatchObject({ ContinuationToken: "next" });
+  });
+
+  it("flags results as truncated and stops fetching when it reaches the result bound", async () => {
+    const bounded = createS3Service({
+      client: { send },
+      allowedBuckets: ["reports"],
+      objectMaxBytes: 1,
+      searchMaxResults: 1,
+      searchMaxPages: 5
+    });
+    send.mockResolvedValueOnce({
+      Contents: [{ Key: "reports/one.pdf", Size: 1 }, { Key: "reports/two.pdf", Size: 2 }],
+      NextContinuationToken: "next"
+    });
+
+    await expect(bounded.searchObjects("reports", "reports")).resolves.toEqual({
+      objects: [{ key: "reports/one.pdf", size: 1, lastModified: undefined }],
+      truncated: true
+    });
+    expect(send).toHaveBeenCalledTimes(1);
+  });
+
+  it("rejects an empty search query before querying S3", async () => {
+    await expect(service.searchObjects("reports", "   ")).rejects.toThrow("Search query is required");
+    expect(send).not.toHaveBeenCalled();
+  });
+
+  it("serves a server-verified PDF preview inline but rejects SVG", async () => {
+    send.mockResolvedValueOnce({ Body: Readable.from("pdf"), ContentType: "application/pdf" });
+
+    await expect(service.getPreviewObject("reports", "report.pdf")).resolves.toMatchObject({
+      headers: {
+        "Content-Disposition": 'inline; filename="report.pdf"',
+        "Content-Type": "application/pdf",
+        "X-Content-Type-Options": "nosniff",
+        "Cache-Control": "no-store"
+      }
+    });
+
+    send.mockResolvedValueOnce({ Body: Readable.from("svg"), ContentType: "image/svg+xml" });
+    await expect(service.getPreviewObject("reports", "diagram.svg")).rejects.toThrow(PreviewNotSupportedError);
+
+    send.mockResolvedValueOnce({ ContentType: "image/svg+xml" });
+    await expect(service.getPreviewObject("reports", "missing-body.svg")).rejects.toThrow(PreviewNotSupportedError);
+  });
+
+  it("rejects duplicate selected keys before fetching an archive body", async () => {
+    await expect(service.getSelectedArchive("reports", ["one.pdf", "one.pdf"])).rejects.toThrow(InvalidArchiveSelectionError);
+    expect(send).not.toHaveBeenCalled();
+  });
+
+  it("rejects unsafe selected keys before fetching object metadata", async () => {
+    await expect(service.getSelectedArchive("reports", ["unsafe\u0000.pdf"])).rejects.toThrow(InvalidArchiveSelectionError);
+    expect(send).not.toHaveBeenCalled();
+  });
+
+  it("rejects an empty selected archive before fetching object metadata", async () => {
+    await expect(service.getSelectedArchive("reports", [])).rejects.toThrow(InvalidArchiveSelectionError);
+    expect(send).not.toHaveBeenCalled();
+  });
+
+  it("rejects selected archive count limits before fetching object metadata", async () => {
+    const limitedService = createS3Service({
+      client: { send },
+      allowedBuckets: ["reports"],
+      objectMaxBytes: 1,
+      archiveMaxObjects: 1
+    });
+
+    await expect(limitedService.getSelectedArchive("reports", ["one.pdf", "two.pdf"])).rejects.toThrow(ArchiveLimitError);
+    expect(send).not.toHaveBeenCalled();
+  });
+
+  it("rejects selected archive byte limits before fetching object bodies", async () => {
+    const limitedService = createS3Service({
+      client: { send },
+      allowedBuckets: ["reports"],
+      objectMaxBytes: 1,
+      archiveMaxBytes: 10
+    });
+    send.mockResolvedValueOnce({ ContentLength: 5 });
+    send.mockResolvedValueOnce({ ContentLength: 6 });
+
+    await expect(limitedService.getSelectedArchive("reports", ["one.pdf", "two.pdf"])).rejects.toThrow(ArchiveLimitError);
+    expect(send).toHaveBeenCalledTimes(2);
+    expect(send.mock.calls.map(([command]) => command)).toEqual([expect.any(HeadObjectCommand), expect.any(HeadObjectCommand)]);
+  });
+
+  it("streams a ZIP of exactly the selected object keys", async () => {
+    const keys = ["reports/one.txt", "reports/nested/two.txt"];
+    send.mockResolvedValueOnce({ ContentLength: 3 });
+    send.mockResolvedValueOnce({ ContentLength: 4 });
+    send.mockResolvedValueOnce({ Body: Readable.from("one") });
+    send.mockResolvedValueOnce({ Body: Readable.from("four") });
+
+    const archive = await service.getSelectedArchive("reports", keys);
+
+    expect(archive.objectCount).toBe(2);
+    expect(archive.totalSize).toBe(7);
+    expect(
+      send.mock.calls
+        .map(([command]) => command)
+        .filter((command): command is GetObjectCommand => command instanceof GetObjectCommand)
+        .map((command) => command.input.Key)
+    ).toEqual(keys);
+    expect(send.mock.calls.map(([command]) => command)).toEqual([
+      expect.any(HeadObjectCommand),
+      expect.any(HeadObjectCommand),
+      expect.any(GetObjectCommand),
+      expect.any(GetObjectCommand)
+    ]);
 
     const chunks: Buffer[] = [];
     for await (const chunk of archive.stream) chunks.push(Buffer.from(chunk));
