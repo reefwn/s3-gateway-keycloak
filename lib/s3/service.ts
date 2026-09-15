@@ -9,6 +9,7 @@ import {
   type S3Client
 } from "@aws-sdk/client-s3";
 import { Readable } from "node:stream";
+import { finished } from "node:stream/promises";
 import { ZipArchive } from "archiver";
 
 import { assertSafeObjectKey, toPrefixMarkerKey } from "@/lib/objects/keys";
@@ -101,6 +102,74 @@ function assertSelectedKeys(keys: readonly string[]): string[] {
   }
 }
 
+function discardBody(body: unknown): void {
+  if (!body || typeof body !== "object") return;
+
+  const cancellableBody = body as {
+    destroy?: () => unknown;
+    cancel?: () => Promise<unknown> | unknown;
+  };
+
+  try {
+    if (typeof cancellableBody.destroy === "function") {
+      cancellableBody.destroy();
+      return;
+    }
+
+    if (typeof cancellableBody.cancel === "function") {
+      void Promise.resolve(cancellableBody.cancel()).catch(() => undefined);
+    }
+  } catch {
+    // Preserve the generic error response for rejected previews and cancelled archives.
+  }
+}
+
+function streamSelectedArchive(input: Readonly<{ client: S3ClientLike }>, archive: ZipArchive, bucket: string, keys: readonly string[]): void {
+  const controller = new AbortController();
+  let activeBody: Readable | undefined;
+  let producing = true;
+  const cancel = () => {
+    controller.abort();
+    discardBody(activeBody);
+  };
+  const onClose = () => {
+    if (producing) cancel();
+  };
+
+  archive.once("close", onClose);
+  void (async () => {
+    try {
+      for (const key of keys) {
+        if (archive.destroyed) return;
+
+        const output = await input.client.send(
+          new GetObjectCommand({ Bucket: bucket, Key: key }),
+          { abortSignal: controller.signal }
+        );
+        if (archive.destroyed) {
+          discardBody(output.Body);
+          return;
+        }
+        if (!output.Body) throw new Error("S3 returned no object body");
+
+        activeBody = output.Body as Readable;
+        const bodyFinished = finished(activeBody);
+        archive.append(activeBody, { name: key });
+        await bodyFinished;
+        activeBody = undefined;
+      }
+
+      if (!archive.destroyed) await archive.finalize();
+    } catch (error) {
+      cancel();
+      if (!archive.destroyed) archive.destroy(error instanceof Error ? error : new Error("S3 archive stream failed"));
+    } finally {
+      producing = false;
+      archive.off("close", onClose);
+    }
+  })();
+}
+
 export function createS3Service(input: Readonly<{
   client: S3ClientLike;
   allowedBuckets: readonly string[];
@@ -187,7 +256,10 @@ export function createS3Service(input: Readonly<{
       const safeKey = assertSafeObjectKey(key);
       const output = await input.client.send(new GetObjectCommand({ Bucket: bucket, Key: safeKey }));
 
-      if (!isPreviewableContentType(output.ContentType)) throw new PreviewNotSupportedError();
+      if (!isPreviewableContentType(output.ContentType)) {
+        discardBody(output.Body);
+        throw new PreviewNotSupportedError();
+      }
       if (!output.Body) throw new Error("S3 returned no object body");
 
       return {
@@ -289,12 +361,7 @@ export function createS3Service(input: Readonly<{
       }
 
       const archive = new ZipArchive({ zlib: { level: 6 } });
-      for (const key of selectedKeys) {
-        const output = await input.client.send(new GetObjectCommand({ Bucket: bucket, Key: key }));
-        if (!output.Body) throw new Error("S3 returned no object body");
-        archive.append(output.Body as Readable, { name: key });
-      }
-      void archive.finalize();
+      streamSelectedArchive(input, archive, bucket, selectedKeys);
 
       return { stream: archive, objectCount: selectedKeys.length, totalSize };
     }

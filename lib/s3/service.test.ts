@@ -1,6 +1,7 @@
 // @vitest-environment node
 
 import { GetObjectCommand, HeadObjectCommand, ListObjectsV2Command, PutObjectCommand } from "@aws-sdk/client-s3";
+import { randomBytes } from "node:crypto";
 import { Readable } from "node:stream";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -199,6 +200,25 @@ describe("S3 service", () => {
     await expect(service.getPreviewObject("reports", "missing-body.svg")).rejects.toThrow(PreviewNotSupportedError);
   });
 
+  it("destroys rejected preview bodies before reporting an unsupported media type", async () => {
+    const rejectedBody = Readable.from([Buffer.alloc(128 * 1024)]);
+    const destroy = vi.spyOn(rejectedBody, "destroy");
+    send.mockResolvedValueOnce({ Body: rejectedBody, ContentType: "image/svg+xml" });
+
+    await expect(service.getPreviewObject("reports", "diagram.svg")).rejects.toThrow(PreviewNotSupportedError);
+    expect(destroy).toHaveBeenCalledOnce();
+    expect(rejectedBody.destroyed).toBe(true);
+  });
+
+  it("cancels rejected web preview bodies", async () => {
+    let cancelled = false;
+    const body = new ReadableStream({ cancel() { cancelled = true; } });
+    send.mockResolvedValueOnce({ Body: body, ContentType: "text/html" });
+
+    await expect(service.getPreviewObject("reports", "page.html")).rejects.toThrow(PreviewNotSupportedError);
+    expect(cancelled).toBe(true);
+  });
+
   it("rejects duplicate selected keys before fetching an archive body", async () => {
     await expect(service.getSelectedArchive("reports", ["one.pdf", "one.pdf"])).rejects.toThrow(InvalidArchiveSelectionError);
     expect(send).not.toHaveBeenCalled();
@@ -252,6 +272,11 @@ describe("S3 service", () => {
 
     expect(archive.objectCount).toBe(2);
     expect(archive.totalSize).toBe(7);
+
+    const chunks: Buffer[] = [];
+    for await (const chunk of archive.stream) chunks.push(Buffer.from(chunk));
+    expect(Buffer.concat(chunks).length).toBeGreaterThan(0);
+
     expect(
       send.mock.calls
         .map(([command]) => command)
@@ -264,9 +289,124 @@ describe("S3 service", () => {
       expect.any(GetObjectCommand),
       expect.any(GetObjectCommand)
     ]);
+  });
+
+  it("streams selected archives through a constrained connection pool", async () => {
+    const bodySize = 2 * 1024 * 1024;
+    const keys = ["reports/first.bin", "reports/second.bin"];
+    let openConnections = 0;
+    const poolSend = vi.fn(async (command: unknown) => {
+      if (command instanceof HeadObjectCommand) return { ContentLength: bodySize };
+      if (!(command instanceof GetObjectCommand)) throw new Error("Unexpected S3 command");
+      if (openConnections >= 1) throw new Error("constrained connection pool exhausted");
+
+      openConnections += 1;
+      const body = Readable.from([randomBytes(bodySize / 2), randomBytes(bodySize / 2)]);
+      let released = false;
+      const release = () => {
+        if (released) return;
+        released = true;
+        openConnections -= 1;
+      };
+      body.once("end", release).once("error", release).once("close", release);
+      return { Body: body };
+    });
+    const pooledService = createS3Service({
+      client: { send: poolSend },
+      allowedBuckets: ["reports"],
+      objectMaxBytes: 1
+    });
+
+    const archive = await pooledService.getSelectedArchive("reports", keys);
 
     const chunks: Buffer[] = [];
     for await (const chunk of archive.stream) chunks.push(Buffer.from(chunk));
+
+    expect(bodySize).toBeGreaterThan(archive.stream.readableHighWaterMark);
     expect(Buffer.concat(chunks).length).toBeGreaterThan(0);
+    expect(openConnections).toBe(0);
+    expect(
+      poolSend.mock.calls
+        .map(([command]) => command)
+        .filter((command): command is GetObjectCommand => command instanceof GetObjectCommand)
+        .map((command) => command.input.Key)
+    ).toEqual(keys);
+  });
+
+  it("surfaces selected archive producer failures through the returned stream", async () => {
+    const producerError = new Error("S3 stream failed");
+    send.mockResolvedValueOnce({ ContentLength: 3 });
+    send.mockResolvedValueOnce({ ContentLength: 4 });
+    send.mockResolvedValueOnce({ Body: Readable.from("one") });
+    send.mockRejectedValueOnce(producerError);
+
+    const archive = await service.getSelectedArchive("reports", ["reports/one.txt", "reports/two.txt"]);
+
+    await expect(async () => {
+      for await (const chunk of archive.stream) {
+        // Consuming the archive advances the controlled producer to the failed GET.
+        void chunk;
+      }
+    }).rejects.toThrow(producerError);
+  });
+
+  it("aborts and disposes active selected archive bodies when the consumer cancels", async () => {
+    const body = new Readable({ read() {} });
+    const destroy = vi.spyOn(body, "destroy");
+    let abortSignal: AbortSignal | undefined;
+    const cancellationSend = vi.fn();
+    cancellationSend.mockImplementation(async (command: unknown, options?: { abortSignal?: AbortSignal }) => {
+      if (command instanceof HeadObjectCommand) return { ContentLength: 1 };
+      if (!(command instanceof GetObjectCommand)) throw new Error("Unexpected S3 command");
+
+      abortSignal = options?.abortSignal;
+      return { Body: body };
+    });
+    const cancellationService = createS3Service({
+      client: { send: cancellationSend },
+      allowedBuckets: ["reports"],
+      objectMaxBytes: 1
+    });
+
+    const archive = await cancellationService.getSelectedArchive("reports", ["reports/pending.txt", "reports/queued.txt"]);
+    await vi.waitFor(() => expect(abortSignal).toBeDefined());
+    archive.stream.destroy();
+    await vi.waitFor(() => expect(abortSignal?.aborted).toBe(true));
+
+    expect(destroy).toHaveBeenCalled();
+    expect(cancellationSend.mock.calls.filter(([command]) => command instanceof GetObjectCommand)).toHaveLength(1);
+  });
+
+  it("disposes a selected archive body that reports a streaming error without closing", async () => {
+    const producerError = new Error("S3 response interrupted");
+    const body = new Readable({ read() {} });
+    send.mockResolvedValueOnce({ ContentLength: 1 });
+    send.mockResolvedValueOnce({ Body: body });
+    const archive = await service.getSelectedArchive("reports", ["reports/interrupted.txt"]);
+    const consumed = (async () => {
+      for await (const chunk of archive.stream) void chunk;
+    })();
+    const rejected = expect(consumed).rejects.toThrow(producerError);
+
+    body.emit("error", producerError);
+    await rejected;
+
+    expect(body.destroyed).toBe(true);
+  });
+
+  it("returns before a pending GET resolves and disposes its late body after cancellation", async () => {
+    const body = new Readable({ read() {} });
+    let resolveGet!: (output: { Body: Readable }) => void;
+    const pendingGet = new Promise<{ Body: Readable }>((resolve) => { resolveGet = resolve; });
+    send.mockResolvedValueOnce({ ContentLength: 1 });
+    send.mockResolvedValueOnce({ ContentLength: 1 });
+    send.mockReturnValueOnce(pendingGet);
+
+    const archive = await service.getSelectedArchive("reports", ["reports/pending.txt", "reports/queued.txt"]);
+    archive.stream.destroy();
+    resolveGet({ Body: body });
+    await vi.waitFor(() => expect(body.destroyed).toBe(true));
+
+    expect(send.mock.calls.filter(([command]) => command instanceof GetObjectCommand)).toHaveLength(1);
   });
 });
