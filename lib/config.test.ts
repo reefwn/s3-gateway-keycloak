@@ -28,6 +28,12 @@ describe("loadConfig", () => {
     });
   });
 
+  it("uses bounded whole-bucket search defaults and rejects non-positive overrides", () => {
+    expect(loadConfig(validEnvironment)).toMatchObject({ searchMaxResults: 100, searchMaxPages: 25 });
+    expect(() => loadConfig({ ...validEnvironment, S3_SEARCH_MAX_RESULTS: "0" })).toThrow(/S3_SEARCH_MAX_RESULTS/i);
+    expect(() => loadConfig({ ...validEnvironment, S3_SEARCH_MAX_PAGES: "-1" })).toThrow(/S3_SEARCH_MAX_PAGES/i);
+  });
+
   it("accepts the local Keycloak issuer used by Compose", () => {
     expect(loadConfig({
       ...validEnvironment,

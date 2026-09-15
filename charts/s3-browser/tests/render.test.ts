@@ -52,6 +52,8 @@ describe("s3-browser chart", () => {
     const configMap = sourceManifest(result.stdout, "configmap.yaml");
     expect(configMap).toContain("S3_ALLOWED_BUCKETS");
     expect(configMap).toContain("S3_ROLE_MAPPING");
+    expect(configMap).toContain("S3_SEARCH_MAX_RESULTS");
+    expect(configMap).toContain("S3_SEARCH_MAX_PAGES");
     expect(configMap).not.toContain("DATABASE_URL");
     expect(configMap).not.toContain("AWS_ACCESS_KEY_ID");
 
