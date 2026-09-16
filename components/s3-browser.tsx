@@ -51,7 +51,6 @@ export function S3Browser({ actor, buckets }: Readonly<{ actor: Actor; buckets: 
   const [selectedKeys, setSelectedKeys] = useState<readonly string[]>([]);
   const [previewKey, setPreviewKey] = useState<string | null>(null);
   const [isSearching, setIsSearching] = useState(false);
-  const [isDownloading, setIsDownloading] = useState(false);
   const [isLoading, setIsLoading] = useState(false);
   const [uploadOpen, setUploadOpen] = useState(false);
   const [folderOpen, setFolderOpen] = useState(false);
@@ -138,33 +137,24 @@ export function S3Browser({ actor, buckets }: Readonly<{ actor: Actor; buckets: 
     }
   }
 
-  async function downloadSelected() {
-    if (!selectedBucket || selectedKeys.length === 0 || isDownloading) return;
-    setIsDownloading(true);
+  function downloadSelected() {
+    if (!selectedBucket || selectedKeys.length === 0) return;
     setStatus("");
+    const form = document.createElement("form");
+    form.method = "post";
+    form.action = `/api/selected-download/${encodeURIComponent(selectedBucket)}`;
+    const input = document.createElement("input");
+    input.type = "hidden";
+    input.name = "keys";
+    input.value = JSON.stringify(selectedKeys);
+    form.append(input);
+    document.body.append(form);
     try {
-      const response = await fetch(`/api/selected-download/${encodeURIComponent(selectedBucket)}`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ keys: selectedKeys }),
-      });
-      if (!response.ok) {
-        setStatus(await responseError(response, "Download failed."));
-        return;
-      }
-      const url = URL.createObjectURL(await response.blob());
-      const link = document.createElement("a");
-      link.href = url;
-      link.download = "selected-objects.zip";
-      document.body.append(link);
-      link.click();
-      link.remove();
-      // Allow the browser to start saving before releasing the download URL.
-      setTimeout(() => URL.revokeObjectURL(url), 60_000);
+      form.submit();
     } catch {
       setStatus("Download could not be completed. Try again.");
     } finally {
-      setIsDownloading(false);
+      form.remove();
     }
   }
 
@@ -437,7 +427,7 @@ export function S3Browser({ actor, buckets }: Readonly<{ actor: Actor; buckets: 
                   <aside aria-label="Selected objects" className="flex flex-col gap-3 border border-[#eaeaea] bg-muted/40 p-4 sm:flex-row sm:flex-wrap sm:items-center sm:justify-between">
                     <p className="text-sm font-medium" aria-live="polite">{selectedKeys.length} selected</p>
                     <div className="flex flex-wrap gap-2">
-                      <Button aria-label="Download selected as ZIP" disabled={isDownloading} onClick={downloadSelected}><DownloadIcon className="size-4" />{isDownloading ? "Preparing ZIP…" : "Download selected as ZIP"}</Button>
+                      <Button onClick={downloadSelected}><DownloadIcon className="size-4" />Download selected as ZIP</Button>
                       {selectedObject && isPreviewableKey(selectedObject.key) && <Button aria-haspopup="dialog" aria-label="Preview selected file" onClick={() => setPreviewKey(selectedObject.key)} ref={previewButton} variant="outline"><EyeIcon className="size-4" />Preview</Button>}
                       <Button onClick={() => setSelectedKeys([])} variant="ghost">Clear selection</Button>
                     </div>
@@ -457,7 +447,7 @@ export function S3Browser({ actor, buckets }: Readonly<{ actor: Actor; buckets: 
             <DialogDescription>Preview of the selected object.</DialogDescription>
           </DialogHeader>
           {previewUrl && (previewKey?.toLocaleLowerCase().endsWith(".pdf") ? (
-            <iframe className="h-[70vh] w-full" sandbox="" src={previewUrl} title={`Preview ${previewFilename}`} />
+            <iframe className="h-[70vh] w-full" src={previewUrl} title={`Preview ${previewFilename}`} />
           ) : (
             // The authenticated preview route streams the original image without Next.js optimization.
             // eslint-disable-next-line @next/next/no-img-element

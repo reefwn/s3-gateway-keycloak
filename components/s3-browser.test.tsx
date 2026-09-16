@@ -165,14 +165,14 @@ describe("S3Browser", () => {
     expect(screen.getByRole("checkbox", { name: "Select photo.png" })).toBeChecked();
   });
 
-  it("uses an encoded same-origin URL and a sandboxed iframe for PDF preview", async () => {
+  it("uses an encoded same-origin URL without a sandbox that blocks the browser PDF renderer", async () => {
     await renderBrowserWithListing("readonly", { objects: [{ key: "archive/report #1?.PDF", size: 4 }], prefixes: [] });
     fireEvent.click(screen.getByRole("checkbox", { name: "Select report #1?.PDF" }));
     fireEvent.click(screen.getByRole("button", { name: "Preview selected file" }));
     const dialog = screen.getByRole("dialog", { name: "Preview report #1?.PDF" });
     const frame = within(dialog).getByTitle("Preview report #1?.PDF");
     expect(frame.tagName).toBe("IFRAME");
-    expect(frame).toHaveAttribute("sandbox", "");
+    expect(frame).not.toHaveAttribute("sandbox");
     expect(frame).toHaveAttribute("src", "/api/object-preview/reports/archive/report%20%231%3F.PDF");
   });
 
@@ -198,36 +198,47 @@ describe("S3Browser", () => {
     expect(screen.queryByRole("button", { name: "Preview selected file" })).not.toBeInTheDocument();
   });
 
-  it("downloads selected keys with a JSON POST to the selected-download endpoint", async () => {
+  it("submits selected keys with a native POST form without fetching or buffering the ZIP", async () => {
     const fetchMock = await renderBrowserWithListing();
-    fetchMock.mockResolvedValueOnce(new Response("zip-content", { headers: { "Content-Type": "application/zip" } }));
-    const createObjectURL = vi.fn().mockReturnValue("blob:archive");
-    const revokeObjectURL = vi.fn();
-    vi.stubGlobal("URL", class extends URL {
-      static createObjectURL = createObjectURL;
-      static revokeObjectURL = revokeObjectURL;
+    const blob = vi.spyOn(Response.prototype, "blob");
+    let submission: unknown;
+    const submit = vi.spyOn(HTMLFormElement.prototype, "submit").mockImplementation(function (this: HTMLFormElement) {
+      submission = {
+        connected: this.isConnected,
+        method: this.method,
+        action: this.action,
+        encoding: this.enctype,
+        fields: [...new FormData(this).entries()],
+        inputType: this.querySelector('[name="keys"]')?.getAttribute("type")
+      };
     });
-    const downloads: { href: string; filename: string }[] = [];
-    vi.spyOn(HTMLAnchorElement.prototype, "click").mockImplementation(function (this: HTMLAnchorElement) {
-      downloads.push({ href: this.href, filename: this.download });
-    });
-    fireEvent.click(screen.getByRole("checkbox", { name: "Select photo.png" }));
+    fireEvent.click(screen.getByRole("checkbox", { name: "Select all visible files" }));
     fireEvent.click(screen.getByRole("button", { name: "Download selected as ZIP" }));
-    await waitFor(() => expect(downloads).toEqual([{ href: "blob:archive", filename: "selected-objects.zip" }]));
-    expect(fetchMock).toHaveBeenLastCalledWith("/api/selected-download/reports", expect.objectContaining({
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: '{"keys":["photo.png"]}',
-    }));
-    expect(await createObjectURL.mock.calls[0][0].text()).toBe("zip-content");
+    expect(submit).toHaveBeenCalledTimes(1);
+    expect(submission).toEqual({
+      connected: true,
+      method: "post",
+      action: `${window.location.origin}/api/selected-download/reports`,
+      encoding: "application/x-www-form-urlencoded",
+      fields: [["keys", '["notes.txt","photo.png"]']],
+      inputType: "hidden"
+    });
+    expect(submit.mock.contexts[0]).not.toBeInTheDocument();
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(blob).not.toHaveBeenCalled();
+    expect(screen.getByRole("complementary", { name: "Selected objects" })).toHaveTextContent("2 selected");
   });
 
-  it("keeps selection and shows the API error when selected download fails", async () => {
-    const fetchMock = await renderBrowserWithListing();
-    fetchMock.mockResolvedValueOnce(jsonResponse({ error: "Download transfer limit reached" }, 429));
+  it("keeps selection and removes the temporary form if native submission fails", async () => {
+    await renderBrowserWithListing();
+    const submit = vi.spyOn(HTMLFormElement.prototype, "submit").mockImplementation(() => {
+      throw new Error("Submission failed");
+    });
     fireEvent.click(screen.getByRole("checkbox", { name: "Select photo.png" }));
     fireEvent.click(screen.getByRole("button", { name: "Download selected as ZIP" }));
-    expect(await screen.findByRole("status")).toHaveTextContent("Download transfer limit reached");
+    expect(await screen.findByRole("status")).toHaveTextContent("Download could not be completed. Try again.");
+    expect(submit).toHaveBeenCalledTimes(1);
+    expect(submit.mock.contexts[0]).not.toBeInTheDocument();
     expect(screen.getByRole("checkbox", { name: "Select photo.png" })).toBeChecked();
     expect(screen.getByRole("button", { name: "Download selected as ZIP" })).toBeEnabled();
   });

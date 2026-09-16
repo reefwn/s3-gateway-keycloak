@@ -17,7 +17,14 @@ async function selectedKeys(request: Request): Promise<string[] | undefined> {
   let body: unknown;
 
   try {
-    body = await request.json();
+    const contentType = request.headers.get("content-type")?.split(";")[0].trim().toLowerCase();
+    if (contentType === "application/x-www-form-urlencoded" || contentType === "multipart/form-data") {
+      const entries = [...(await request.formData()).entries()];
+      if (entries.length !== 1 || entries[0][0] !== "keys" || typeof entries[0][1] !== "string") return undefined;
+      body = { keys: JSON.parse(entries[0][1]) };
+    } else {
+      body = await request.json();
+    }
   } catch {
     return undefined;
   }

@@ -48,6 +48,24 @@ function selectedRequest(body: unknown): Request {
   });
 }
 
+function selectedFormRequest(body: URLSearchParams | FormData): Request {
+  return new Request("https://app.test/api/selected-download/reports", {
+    method: "POST",
+    headers: { Origin: "https://app.test" },
+    body
+  });
+}
+
+const requestFormats = [
+  { name: "JSON", request: (keys: string[]) => selectedRequest({ keys }) },
+  { name: "URL-encoded form", request: (keys: string[]) => selectedFormRequest(new URLSearchParams({ keys: JSON.stringify(keys) })) },
+  { name: "multipart form", request: (keys: string[]) => {
+    const form = new FormData();
+    form.set("keys", JSON.stringify(keys));
+    return selectedFormRequest(form);
+  } }
+];
+
 describe("POST /api/selected-download/[bucket]", () => {
   beforeEach(() => {
     mocks.requireCapability.mockReset();
@@ -97,10 +115,37 @@ describe("POST /api/selected-download/[bucket]", () => {
     expect(mocks.transferAcquire).not.toHaveBeenCalled();
   });
 
-  it("blocks an untrusted origin before acquiring a lease or accessing S3", async () => {
+  it.each([
+    { name: "missing keys", fields: [] },
+    { name: "malformed JSON", fields: [["keys", "{"]] },
+    { name: "string instead of array", fields: [["keys", '"report.pdf"']] },
+    { name: "non-string array item", fields: [["keys", "[1]"]] },
+    { name: "duplicate keys fields", fields: [["keys", '["report.pdf"]'], ["keys", '["secret.pdf"]']] },
+    { name: "extra form field", fields: [["keys", '["report.pdf"]'], ["prefix", "private/"]] }
+  ])("rejects a form with $name before leasing", async ({ fields }) => {
+    const response = await POST(selectedFormRequest(new URLSearchParams(fields)), context);
+
+    expect(response.status).toBe(400);
+    expect(response.headers.get("Cache-Control")).toBe("no-store");
+    await expect(response.json()).resolves.toEqual({ error: "Select one or more unique objects" });
+    expect(mocks.transferAcquire).not.toHaveBeenCalled();
+    expect(mocks.service.getSelectedArchive).not.toHaveBeenCalled();
+  });
+
+  it("rejects a file-valued keys form field before leasing", async () => {
+    const form = new FormData();
+    form.set("keys", new Blob(['["report.pdf"]']), "keys.json");
+    const response = await POST(selectedFormRequest(form), context);
+
+    expect(response.status).toBe(400);
+    expect(mocks.transferAcquire).not.toHaveBeenCalled();
+    expect(mocks.service.getSelectedArchive).not.toHaveBeenCalled();
+  });
+
+  it.each(requestFormats)("blocks an untrusted $name origin before acquiring a lease or accessing S3", async ({ request }) => {
     mocks.assertTrustedMutationOrigin.mockImplementationOnce(() => { throw new Error("untrusted origin"); });
 
-    const response = await POST(selectedRequest({ keys: ["private/report.pdf"] }), context);
+    const response = await POST(request(["private/report.pdf"]), context);
 
     expect(response.status).toBe(500);
     expect(response.headers.get("Cache-Control")).toBe("no-store");
@@ -130,31 +175,31 @@ describe("POST /api/selected-download/[bucket]", () => {
     expect(mocks.transferRelease).toHaveBeenCalledExactlyOnceWith("lease-123");
   });
 
-  it("requires download capability before leasing a selected ZIP", async () => {
+  it.each(requestFormats)("requires download capability before leasing a $name selected ZIP", async ({ request }) => {
     mocks.requireCapability.mockRejectedValueOnce(new mocks.AccessDeniedError());
 
-    const response = await POST(selectedRequest({ keys: ["2026/report.pdf"] }), context);
+    const response = await POST(request(["2026/report.pdf"]), context);
 
     expect(response.status).toBe(404);
     expect(mocks.transferAcquire).not.toHaveBeenCalled();
     expect(mocks.service.getSelectedArchive).not.toHaveBeenCalled();
   });
 
-  it("rejects a selected ZIP when the download lease is unavailable", async () => {
+  it.each(requestFormats)("rejects a $name selected ZIP when the download lease is unavailable", async ({ request }) => {
     mocks.transferAcquire.mockResolvedValueOnce({ granted: false });
 
-    const response = await POST(selectedRequest({ keys: ["2026/report.pdf"] }), context);
+    const response = await POST(request(["2026/report.pdf"]), context);
 
     expect(response.status).toBe(429);
     expect(mocks.service.getSelectedArchive).not.toHaveBeenCalled();
     expect(mocks.beginAuditedStream).not.toHaveBeenCalled();
   });
 
-  it("streams a selected ZIP with a non-sensitive audit prefix", async () => {
+  it.each(requestFormats)("streams a $name selected ZIP with a non-sensitive audit prefix", async ({ request }) => {
     const stream = Readable.from([Buffer.from("zip")]);
     mocks.service.getSelectedArchive.mockResolvedValue({ stream, objectCount: 2, totalSize: 32 });
 
-    const response = await POST(selectedRequest({ keys: ["2026/report.pdf", "2026/summary.pdf"] }), context);
+    const response = await POST(request(["2026/report.pdf", "2026/summary.pdf"]), context);
 
     expect(response.headers.get("Content-Type")).toBe("application/zip");
     expect(response.headers.get("Content-Disposition")).toBe('attachment; filename="selected-objects.zip"');
