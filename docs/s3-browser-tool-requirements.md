@@ -41,8 +41,9 @@ AWS S3 administration or a general S3 proxy API.
   programmatic/public API.
 - Bulk upload or bulk delete. Prefix download is the one bulk operation in
   scope.
-- Malware scanning, inline previews, thumbnails, video processing, or an
-  audit-log UI/export facility.
+- Malware scanning, thumbnails, video processing, or an audit-log UI/export
+  facility. The narrowly constrained preview described below is the only
+  inline rendering in scope.
 - Application implementation of CloudTrail, alert routing, on-call
   integration, database backup, retention review, or manual audit deletion.
   These are external platform/compliance processes.
@@ -90,9 +91,23 @@ not a supported external API.
 - **List:** use S3 `ListObjectsV2` with prefix navigation and pagination.
   Inaccessible resources return a generic “not found or not permitted”
   response, without exposing bucket/key existence.
+- **Search:** search the current approved bucket by case-insensitive full key,
+  including nested objects. Bound each search by deployment configuration for
+  maximum results and maximum S3 list pages; mark results as partial when a
+  bound is reached. Search does not expose an arbitrary-bucket endpoint.
 - **Download:** stream a single object through the application. Serve it as an
-  attachment with `X-Content-Type-Options: nosniff`; do not preview untrusted
-  content inline.
+  attachment with `X-Content-Type-Options: nosniff`. No public, presigned, or
+  otherwise unauthenticated download URL is provided.
+- **Preview:** an authenticated user with download access may open an
+  application-owned, same-origin preview stream only for a PDF or raster image
+  (`PNG`, `JPEG`, `GIF`, `WebP`, or `AVIF`). The server, rather than the
+  filename or browser, enforces the media-type allowlist. Preview responses
+  use `Content-Disposition: inline`, `Cache-Control: no-store`, and
+  `X-Content-Type-Options: nosniff`; they never use a public URL. SVG, HTML,
+  video, office documents, and every other media type are not previewable.
+  PDF uses the browser's same-origin viewer in an unsandboxed iframe because
+  Chrome's native PDF renderer is incompatible with the sandbox restriction;
+  the server allowlist and response headers are the protection boundary.
 - **Upload:** accept arbitrary file types. Upload one selected file to the
   current prefix, defaulting to its basename; the user may edit the filename.
   The server streams directly to S3 and must never buffer a whole object in
@@ -105,14 +120,16 @@ not a supported external API.
   or paste the exact object key before confirming deletion.
 - **Folders:** S3 folders are prefixes. Creation writes an optional zero-byte
   key ending in `/`; no recursive folder deletion is provided.
-- **Prefix download:** create a ZIP streamed through the application. It must
-  not be assembled in memory or local disk. Limit each archive to **2 GiB
-  uncompressed** and **1,000 objects**; make both limits deployment
-  configuration.
+- **ZIP download:** prefix downloads and selected-file ZIPs stream through the
+  application and must not be assembled in memory, local disk, or a
+  client-side blob. Selected-file ZIPs use an authenticated same-origin form
+  POST so the browser receives the stream natively. Limit every archive,
+  including a selected-file ZIP, to **2 GiB uncompressed** and **1,000
+  objects**; make both limits deployment configuration.
 - **Transfer limits:** permit up to **five concurrent uploads and five
-  concurrent downloads per user**. Enforce limits globally across replicas
-  through PostgreSQL-backed active-transfer tracking with expiry/heartbeat
-  handling.
+  concurrent downloads per user; previews and selected-file ZIPs are download
+  transfers. Enforce limits globally across replicas through PostgreSQL-backed
+  active-transfer tracking with expiry/heartbeat handling.
 - Send `Cache-Control: no-store` for authenticated pages, APIs, and streamed
   downloads. A user’s explicit download is intentionally written to their
   managed device.
@@ -131,8 +148,9 @@ not a supported external API.
 - Use bucket-default encryption and disallow public ACLs.
 - All environment-specific values are supplied by DevOps at deployment:
   Keycloak issuer/client and role mapping, approved HTTPS origin, bucket
-  inventory, database/Vault settings, transfer/archive limits, and IRSA
-  binding. The application contains no named-environment branches.
+  inventory, database/Vault settings, transfer/archive limits, bounded search
+  limits (`S3_SEARCH_MAX_RESULTS` and `S3_SEARCH_MAX_PAGES`), and IRSA binding.
+  The application contains no named-environment branches.
 - Validate the full configuration at startup and fail fast when it is missing,
   malformed, or contradictory. Changes require reviewed, version-controlled
   configuration deployment and restart; no runtime configuration UI or hot
@@ -160,9 +178,10 @@ not a supported external API.
 ### Events and fail-closed behavior
 
 - Record a durable, append-only attempt event before each S3 action and a
-  separate outcome event afterward. Audit list, download, upload, overwrite,
-  prefix creation, delete, prefix ZIP download, authorization denials,
-  sign-in, sign-out, and callback failures.
+  separate outcome event afterward. Audit list, bucket search, download,
+  preview, upload, overwrite, prefix creation, delete, prefix ZIP download,
+  selected-file ZIP download, authorization denials, sign-in, sign-out, and
+  callback failures.
 - Every event includes timestamp, immutable Keycloak `sub`, snapshot of
   username/email, action, bucket, full key or prefix when applicable,
   correlation/request ID, source IP, user agent, and outcome/error class.

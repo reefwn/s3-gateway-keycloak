@@ -107,4 +107,17 @@ describe("s3-browser chart", () => {
     const configMap = sourceManifest(result.stdout, "configmap.yaml");
     expect(configMap).toContain('ALLOW_INSECURE_HTTP: "true"');
   });
+
+  it("passes bounded bucket-search limits through to the ConfigMap", () => {
+    const result = render([
+      "--set", "app.searchMaxResults=37",
+      "--set", "app.searchMaxPages=9"
+    ]);
+
+    expect(result.status, result.stderr).toBe(0);
+
+    const configMap = sourceManifest(result.stdout, "configmap.yaml");
+    expect(configMap).toContain('S3_SEARCH_MAX_RESULTS: "37"');
+    expect(configMap).toContain('S3_SEARCH_MAX_PAGES: "9"');
+  });
 });
