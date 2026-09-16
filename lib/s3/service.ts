@@ -96,13 +96,15 @@ function isPreviewableContentType(contentType: string | undefined): contentType 
 
 function assertArchiveNames(names: readonly string[], allowDirectories = false): void {
   const normalizedNames = new Set<string>();
+  const entries: { name: string; isDirectory: boolean }[] = [];
   for (const name of names) {
     try {
       assertSafeObjectKey(name);
     } catch {
       throw new InvalidArchiveSelectionError();
     }
-    const path = allowDirectories && name.endsWith("/") ? name.slice(0, -1) : name;
+    const isDirectory = allowDirectories && name.endsWith("/");
+    const path = isDirectory ? name.slice(0, -1) : name;
     // ZIP extractors treat backslashes, drive prefixes, and dot segments as paths.
     if (/[\\:]/.test(path) || path.split("/").some((part) => !part || /[. ]$/.test(part))) {
       throw new InvalidArchiveSelectionError();
@@ -110,6 +112,13 @@ function assertArchiveNames(names: readonly string[], allowDirectories = false):
     const normalizedName = path.normalize("NFC").toLowerCase();
     if (normalizedNames.has(normalizedName)) throw new InvalidArchiveSelectionError();
     normalizedNames.add(normalizedName);
+    entries.push({ name: normalizedName, isDirectory });
+  }
+
+  for (const entry of entries) {
+    if (!entry.isDirectory && entries.some((other) => other.name.startsWith(`${entry.name}/`))) {
+      throw new InvalidArchiveSelectionError();
+    }
   }
 }
 

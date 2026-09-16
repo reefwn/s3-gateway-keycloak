@@ -310,6 +310,21 @@ describe("S3 service", () => {
     expect(send).not.toHaveBeenCalled();
   });
 
+  it("rejects selected archive file entries that are ancestors of another entry before fetching metadata", async () => {
+    await expect(service.getSelectedArchive("reports", ["folder", "folder/file.txt"])).rejects.toThrow(InvalidArchiveSelectionError);
+    expect(send).not.toHaveBeenCalled();
+  });
+
+  it("rejects prefix archive file entries that are ancestors of another entry before fetching bodies", async () => {
+    send.mockResolvedValueOnce({ Contents: [
+      { Key: "reports/folder", Size: 1 }, { Key: "reports/folder/file.txt", Size: 1 }
+    ] });
+
+    await expect(service.getPrefixArchive("reports", "reports/")).rejects.toThrow(InvalidArchiveSelectionError);
+    expect(send).toHaveBeenCalledTimes(1);
+    expect(send).toHaveBeenLastCalledWith(expect.any(ListObjectsV2Command));
+  });
+
   it.each(["../../outside.txt", "bad\nfile.txt"])("rejects unsafe prefix archive name %j before fetching any bodies", async (name) => {
     send.mockResolvedValueOnce({ Contents: [
       { Key: "reports/safe.txt", Size: 1 }, { Key: `reports/${name}`, Size: 1 }
