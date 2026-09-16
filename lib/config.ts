@@ -22,6 +22,8 @@ const rawConfigSchema = z.object({
   S3_TRANSFER_LIMIT: z.coerce.number().int().min(1).default(5),
   S3_ARCHIVE_MAX_OBJECTS: z.coerce.number().int().min(1).default(1000),
   S3_ARCHIVE_MAX_BYTES: z.coerce.number().int().min(1).default(DEFAULT_ARCHIVE_BYTES),
+  S3_SEARCH_MAX_RESULTS: z.coerce.number().int().min(1).default(100),
+  S3_SEARCH_MAX_PAGES: z.coerce.number().int().min(1).default(25),
   S3_ENDPOINT_URL: z.string().optional(),
   S3_ACCESS_KEY_ID: z.string().optional(),
   S3_SECRET_ACCESS_KEY: z.string().optional(),
@@ -54,6 +56,8 @@ export type AppConfig = Readonly<{
   transferLimit: number;
   archiveMaxObjects: number;
   archiveMaxBytes: number;
+  searchMaxResults: number;
+  searchMaxPages: number;
 }>;
 
 function parseRoleMapping(value: string): Record<string, AppRole> {
@@ -171,6 +175,8 @@ export function loadConfig(environment: Record<string, string | undefined> = pro
     objectMaxBytes: raw.S3_OBJECT_MAX_BYTES,
     transferLimit: raw.S3_TRANSFER_LIMIT,
     archiveMaxObjects: raw.S3_ARCHIVE_MAX_OBJECTS,
-    archiveMaxBytes: raw.S3_ARCHIVE_MAX_BYTES
+    archiveMaxBytes: raw.S3_ARCHIVE_MAX_BYTES,
+    searchMaxResults: raw.S3_SEARCH_MAX_RESULTS,
+    searchMaxPages: raw.S3_SEARCH_MAX_PAGES
   });
 }

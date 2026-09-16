@@ -48,7 +48,10 @@ All configuration is deployment-supplied; source code does not name environments
   `ALLOW_INSECURE_HTTP=true` — see below).
 - PostgreSQL `DATABASE_URL`.
 - S3 region, comma-separated bucket allowlist, Keycloak claim path, and role mapping JSON.
-- Optional object, transfer, and archive limits; defaults are 500 MiB, five uploads/downloads per actor, 1,000 objects, and 2 GiB uncompressed archive size.
+- Optional object, transfer, archive, and bounded-search limits. Defaults are
+  500 MiB, five uploads/downloads per actor, 1,000 objects, 2 GiB
+  uncompressed archive size, `S3_SEARCH_MAX_RESULTS=100`, and
+  `S3_SEARCH_MAX_PAGES=25`.
 
 Static AWS credentials are deliberately rejected at startup. The deployed service must use the AWS SDK default IRSA credential chain.
 
@@ -134,10 +137,12 @@ removing the retained PVC.
 
 ## Application behavior
 
-- `readonly` can browse and download; `readwrite` can also upload and create prefix markers; `admin` can additionally delete individual objects after typing the exact key.
-- Uploads and downloads stream through the server. Prefix downloads stream a ZIP archive and are bounded by the configured object/size limits.
+- `readonly` can browse and download; `readwrite` can also upload and create prefix markers; `admin` can additionally delete an individual object from its row after typing the exact key.
+- Uploads and downloads stream through the server. Prefix and selected-file ZIP downloads are server-streamed, with selected ZIPs submitted by a native same-origin form so the browser receives the stream without client-side buffering. Both archive types are bounded by the configured object/size limits.
+- Authenticated previews are limited to server-allowlisted PDF and raster-image streams (`PNG`, `JPEG`, `GIF`, `WebP`, and `AVIF`). Preview responses are same-origin, inline, `no-store`, and `nosniff`; SVG, HTML, video, office documents, and other types never preview, and no public preview or download URL exists. PDF uses Chrome's compatible same-origin iframe viewer without a sandbox.
+- Current-bucket key search is case-insensitive across nested objects and is bounded by `S3_SEARCH_MAX_RESULTS` (default `100`) and `S3_SEARCH_MAX_PAGES` (default `25`).
 - All S3 actions write an append-only attempt event and outcome event to PostgreSQL. If the attempt cannot be stored, the action is denied.
-- Authenticated pages, APIs, and downloads use `Cache-Control: no-store`; object downloads are attachment-only and `nosniff`.
+- Authenticated pages, APIs, and downloads use `Cache-Control: no-store`; standard object downloads are attachment-only and `nosniff`.
 
 ## Operator index interface
 
@@ -145,6 +150,8 @@ The application-owned sign-in page starts the Keycloak flow; Keycloak continues 
 
 - Select an approved bucket from the persistent bucket index, then navigate prefixes with breadcrumbs or the parent action.
 - Use the finder to filter the current prefix locally by folder or object name. Folder rows always precede object rows.
+- Use bucket search to find matching keys anywhere in the selected bucket and open a result's containing path. Search is intentionally bounded and can report partial results.
+- Select visible object rows (never folders) to download them as one ZIP; preview is offered only for one eligible PDF or raster image.
 - Role-gated upload, prefix creation, and deletion controls appear only after a bucket is selected. The same server-side authorization rules remain authoritative.
 - Refresh the current prefix or download it as a ZIP without leaving the workspace. Browser request failures show generic retry guidance instead of transport details.
 

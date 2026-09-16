@@ -18,3 +18,5 @@ data:
   S3_TRANSFER_LIMIT: {{ printf "%.0f" (.Values.app.transferLimit | float64) | quote }}
   S3_ARCHIVE_MAX_OBJECTS: {{ printf "%.0f" (.Values.app.archiveMaxObjects | float64) | quote }}
   S3_ARCHIVE_MAX_BYTES: {{ printf "%.0f" (.Values.app.archiveMaxBytes | float64) | quote }}
+  S3_SEARCH_MAX_RESULTS: {{ printf "%.0f" (.Values.app.searchMaxResults | float64) | quote }}
+  S3_SEARCH_MAX_PAGES: {{ printf "%.0f" (.Values.app.searchMaxPages | float64) | quote }}

@@ -31,6 +31,8 @@ app:
   transferLimit: 5
   archiveMaxObjects: 1000
   archiveMaxBytes: 2147483648
+  searchMaxResults: 100
+  searchMaxPages: 25
   podAnnotations: {}
   podLabels: {}
   podSecurityContext:

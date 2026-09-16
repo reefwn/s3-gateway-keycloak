@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { filterAndSortListing, parentPrefix, prefixSegments } from "@/lib/objects/operator-index";
+import { containingPrefix, filterAndSortListing, isPreviewableKey, parentPrefix, prefixSegments } from "@/lib/objects/operator-index";
 
 describe("operator index helpers", () => {
   it("returns a parent prefix without escaping the bucket root", () => {
@@ -12,6 +12,14 @@ describe("operator index helpers", () => {
   it("turns a prefix into breadcrumb segments", () => {
     expect(prefixSegments("reports/2026/august/")).toEqual(["reports", "2026", "august"]);
     expect(prefixSegments("")).toEqual([]);
+  });
+
+  it("recognises only PDF and raster-image preview filenames", () => {
+    expect(isPreviewableKey("photos/Scan.JPEG")).toBe(true);
+    expect(isPreviewableKey("reports/summary.pdf")).toBe(true);
+    expect(isPreviewableKey("uploads/vector.svg")).toBe(false);
+    expect(containingPrefix("reports/2026/summary.pdf")).toBe("reports/2026/");
+    expect(containingPrefix("summary.pdf")).toBe("");
   });
 
   it("filters folders and objects by finder text without mutating the listing", () => {

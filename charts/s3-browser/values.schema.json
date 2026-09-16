@@ -27,6 +27,8 @@
         "transferLimit",
         "archiveMaxObjects",
         "archiveMaxBytes",
+        "searchMaxResults",
+        "searchMaxPages",
         "service"
       ],
       "properties": {
@@ -75,6 +77,14 @@
           "minimum": 1
         },
         "archiveMaxBytes": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "searchMaxResults": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "searchMaxPages": {
           "type": "integer",
           "minimum": 1
         },

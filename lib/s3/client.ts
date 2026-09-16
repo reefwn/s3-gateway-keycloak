@@ -35,7 +35,9 @@ export function getS3Service(): ReturnType<typeof createS3Service> {
       allowedBuckets: config.allowedBuckets,
       objectMaxBytes: config.objectMaxBytes,
       archiveMaxBytes: config.archiveMaxBytes,
-      archiveMaxObjects: config.archiveMaxObjects
+      archiveMaxObjects: config.archiveMaxObjects,
+      searchMaxResults: config.searchMaxResults,
+      searchMaxPages: config.searchMaxPages
     });
   }
 
