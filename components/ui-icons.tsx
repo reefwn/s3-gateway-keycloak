@@ -22,6 +22,14 @@ export function UploadIcon(props: IconProps) {
   return <Icon {...props}><path d="M12 15V3" /><path d="m7.5 7.5 4.5-4.5 4.5 4.5" /><path d="M5 14v5h14v-5" /></Icon>;
 }
 
+export function DownloadIcon(props: IconProps) {
+  return <Icon {...props}><path d="M12 3v12" /><path d="m7.5 10.5 4.5 4.5 4.5-4.5" /><path d="M5 16v5h14v-5" /></Icon>;
+}
+
+export function EyeIcon(props: IconProps) {
+  return <Icon {...props}><path d="M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7S2 12 2 12Z" /><circle cx="12" cy="12" r="3" /></Icon>;
+}
+
 export function RefreshIcon(props: IconProps) {
   return <Icon {...props}><path d="M19.2 8A7.6 7.6 0 0 0 5 7l-1.5 2.5" /><path d="M3.5 5.5V9.5h4" /><path d="M4.8 16A7.6 7.6 0 0 0 19 17l1.5-2.5" /><path d="M20.5 18.5v-4h-4" /></Icon>;
 }

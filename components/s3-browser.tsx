@@ -1,6 +1,6 @@
 "use client";
 
-import { FormEvent, useMemo, useState } from "react";
+import { FormEvent, useEffect, useMemo, useRef, useState } from "react";
 import { signOut } from "next-auth/react";
 
 import { Badge } from "@/components/ui/badge";
@@ -9,9 +9,9 @@ import { Button } from "@/components/ui/button";
 import { Dialog, DialogClose, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle, DialogTrigger } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
-import { ArchiveIcon, BucketIcon, ChevronLeftIcon, FolderIcon, RefreshIcon, SearchIcon, SignOutIcon, TrashIcon, UploadIcon } from "@/components/ui-icons";
+import { ArchiveIcon, BucketIcon, ChevronLeftIcon, DownloadIcon, EyeIcon, FolderIcon, RefreshIcon, SearchIcon, SignOutIcon, TrashIcon, UploadIcon } from "@/components/ui-icons";
 import type { Actor } from "@/lib/auth/session";
-import { filterAndSortListing, parentPrefix, prefixSegments, type OperatorListing } from "@/lib/objects/operator-index";
+import { containingPrefix, filterAndSortListing, isPreviewableKey, parentPrefix, prefixSegments, type OperatorListing, type OperatorSearchResult } from "@/lib/objects/operator-index";
 
 function formatBytes(bytes: number): string {
   if (bytes < 1024) return `${bytes} B`;
@@ -46,37 +46,125 @@ export function S3Browser({ actor, buckets }: Readonly<{ actor: Actor; buckets: 
   const [listing, setListing] = useState<OperatorListing | null>(null);
   const [status, setStatus] = useState("");
   const [prefix, setPrefix] = useState("");
-  const [query, setQuery] = useState("");
+  const [searchQuery, setSearchQuery] = useState("");
+  const [searchResult, setSearchResult] = useState<OperatorSearchResult | null>(null);
+  const [selectedKeys, setSelectedKeys] = useState<readonly string[]>([]);
+  const [previewKey, setPreviewKey] = useState<string | null>(null);
+  const [isSearching, setIsSearching] = useState(false);
+  const [isDownloading, setIsDownloading] = useState(false);
   const [isLoading, setIsLoading] = useState(false);
   const [uploadOpen, setUploadOpen] = useState(false);
   const [folderOpen, setFolderOpen] = useState(false);
   const [deleteKey, setDeleteKey] = useState<string | null>(null);
   const [deleteConfirmation, setDeleteConfirmation] = useState("");
+  const listingRequest = useRef<AbortController | null>(null);
+  const previewButton = useRef<HTMLButtonElement | null>(null);
 
   const canWrite = actor.role === "readwrite" || actor.role === "admin";
-  const visibleListing = useMemo(() => listing && filterAndSortListing(listing, query), [listing, query]);
+  const hasSearch = searchQuery.trim().length > 0;
+  const visibleListing = useMemo(() => {
+    if (hasSearch) return searchResult && { objects: searchResult.objects, prefixes: [] };
+    return listing && filterAndSortListing(listing, "");
+  }, [listing, hasSearch, searchResult]);
+  const visibleKeys = visibleListing?.objects.map((object) => object.key) ?? [];
+  const allSelected = visibleKeys.length > 0 && visibleKeys.every((key) => selectedKeys.includes(key));
+  const someSelected = visibleKeys.some((key) => selectedKeys.includes(key));
+  const selectedObject = selectedKeys.length === 1 ? visibleListing?.objects.find((object) => object.key === selectedKeys[0]) : undefined;
   const crumbs = prefixSegments(prefix);
   const shownItemCount = visibleListing ? visibleListing.prefixes.length + visibleListing.objects.length : 0;
+  const previewFilename = previewKey?.split("/").at(-1) ?? "";
+  const previewUrl = selectedBucket && previewKey && isPreviewableKey(previewKey)
+    ? `/api/object-preview/${encodeURIComponent(selectedBucket)}/${previewKey.split("/").map(encodeURIComponent).join("/")}`
+    : null;
+
+  useEffect(() => () => listingRequest.current?.abort(), []);
+
+  useEffect(() => {
+    const query = searchQuery.trim();
+    if (!selectedBucket || !query) return;
+    const controller = new AbortController();
+    const timeout = setTimeout(async () => {
+      try {
+        const response = await fetch(`/api/objects/${encodeURIComponent(selectedBucket)}?search=${encodeURIComponent(query)}`, { cache: "no-store", signal: controller.signal });
+        if (!response.ok) {
+          if (!controller.signal.aborted) setStatus("Could not search this bucket. Try again.");
+          return;
+        }
+        const result = (await response.json()) as OperatorSearchResult;
+        if (!controller.signal.aborted) setSearchResult(result);
+      } catch {
+        if (!controller.signal.aborted) setStatus("Could not search this bucket. Try again.");
+      } finally {
+        if (!controller.signal.aborted) setIsSearching(false);
+      }
+    }, 300);
+    return () => {
+      clearTimeout(timeout);
+      controller.abort();
+    };
+  }, [selectedBucket, searchQuery]);
+
+  function changeSearchQuery(value: string) {
+    setSearchQuery(value);
+    setSearchResult(null);
+    setSelectedKeys([]);
+    setPreviewKey(null);
+    setStatus("");
+    setIsSearching(value.trim().length > 0);
+  }
 
   async function browse(bucket: string, nextPrefix = "") {
+    listingRequest.current?.abort();
+    const controller = new AbortController();
+    listingRequest.current = controller;
     setSelectedBucket(bucket);
     setPrefix(nextPrefix);
-    setQuery("");
+    changeSearchQuery("");
     setListing(null);
-    setStatus("");
     setIsLoading(true);
 
     try {
-      const response = await fetch(`/api/objects/${encodeURIComponent(bucket)}?prefix=${encodeURIComponent(nextPrefix)}`, { cache: "no-store" });
+      const response = await fetch(`/api/objects/${encodeURIComponent(bucket)}?prefix=${encodeURIComponent(nextPrefix)}`, { cache: "no-store", signal: controller.signal });
       if (!response.ok) {
-        setStatus("Not found or not permitted");
+        if (!controller.signal.aborted) setStatus("Not found or not permitted");
         return;
       }
-      setListing((await response.json()) as OperatorListing);
+      const result = (await response.json()) as OperatorListing;
+      if (!controller.signal.aborted) setListing(result);
     } catch {
-      setStatus("Could not load this bucket. Try again.");
+      if (!controller.signal.aborted) setStatus("Could not load this bucket. Try again.");
     } finally {
-      setIsLoading(false);
+      if (!controller.signal.aborted) setIsLoading(false);
+    }
+  }
+
+  async function downloadSelected() {
+    if (!selectedBucket || selectedKeys.length === 0 || isDownloading) return;
+    setIsDownloading(true);
+    setStatus("");
+    try {
+      const response = await fetch(`/api/selected-download/${encodeURIComponent(selectedBucket)}`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ keys: selectedKeys }),
+      });
+      if (!response.ok) {
+        setStatus(await responseError(response, "Download failed."));
+        return;
+      }
+      const url = URL.createObjectURL(await response.blob());
+      const link = document.createElement("a");
+      link.href = url;
+      link.download = "selected-objects.zip";
+      document.body.append(link);
+      link.click();
+      link.remove();
+      // Allow the browser to start saving before releasing the download URL.
+      setTimeout(() => URL.revokeObjectURL(url), 60_000);
+    } catch {
+      setStatus("Download could not be completed. Try again.");
+    } finally {
+      setIsDownloading(false);
     }
   }
 
@@ -214,11 +302,11 @@ export function S3Browser({ actor, buckets }: Readonly<{ actor: Actor; buckets: 
 
               <div className="flex flex-col gap-5 p-5 sm:p-6">
                 <section aria-label="Object operations" className="flex flex-col gap-3 border-b border-[#eaeaea] pb-5 lg:flex-row lg:items-center lg:justify-between">
-                  <form aria-label="Find current prefix" className="w-full lg:max-w-xs" role="search">
-                    <label className="sr-only" htmlFor="object-finder">Find in this location</label>
+                  <form aria-label="Search this bucket" className="w-full lg:max-w-xs" onSubmit={(event) => event.preventDefault()} role="search">
+                    <label className="sr-only" htmlFor="object-finder">Search this bucket</label>
                     <div className="relative rounded-md border border-[#eaeaea] transition-colors focus-within:border-foreground">
                       <SearchIcon className="pointer-events-none absolute left-3 top-1/2 size-3.5 -translate-y-1/2 text-muted-foreground" />
-                      <Input aria-label="Find objects" className="h-8 border-0 bg-transparent pl-9 pr-2 focus-visible:ring-0" id="object-finder" onChange={(event) => setQuery(event.target.value)} placeholder="Find in this location" value={query} />
+                      <Input className="h-8 border-0 bg-transparent pl-9 pr-2 focus-visible:ring-0" id="object-finder" onChange={(event) => changeSearchQuery(event.target.value)} placeholder="Search this bucket" value={searchQuery} />
                     </div>
                   </form>
                   {canWrite && (
@@ -273,7 +361,7 @@ export function S3Browser({ actor, buckets }: Readonly<{ actor: Actor; buckets: 
 
                 <div className="flex flex-wrap items-center justify-between gap-3">
                   <p className="font-metadata text-xs uppercase tracking-[0.14em] text-muted-foreground">
-                    {isLoading ? "Loading index" : `${shownItemCount} ${shownItemCount === 1 ? "item" : "items"}`}
+                    {hasSearch && isSearching ? "Searching bucket" : isLoading ? "Loading index" : `${shownItemCount} ${shownItemCount === 1 ? "item" : "items"}`}
                   </p>
                   <div className="flex items-center gap-2">
                     {prefix && <Button onClick={() => browse(selectedBucket, parentPrefix(prefix))} size="sm" variant="ghost"><ChevronLeftIcon className="size-3.5" />Parent</Button>}
@@ -283,12 +371,25 @@ export function S3Browser({ actor, buckets }: Readonly<{ actor: Actor; buckets: 
                 </div>
 
                 {status && <p className="text-sm text-muted-foreground" role="status">{status}</p>}
+                {hasSearch && searchResult?.truncated && <p className="text-sm text-muted-foreground" role="status">Results are partial. Refine your search.</p>}
 
                 {visibleListing && (
                   <Table>
                     <TableHeader>
                       <TableRow>
+                        <TableHead className="w-10">
+                          <input
+                            aria-label="Select all visible files"
+                            checked={allSelected}
+                            className="size-4 cursor-pointer accent-foreground"
+                            disabled={visibleKeys.length === 0}
+                            onChange={() => setSelectedKeys(allSelected ? [] : visibleKeys)}
+                            ref={(input) => { if (input) input.indeterminate = someSelected && !allSelected; }}
+                            type="checkbox"
+                          />
+                        </TableHead>
                         <TableHead>Name</TableHead>
+                        {hasSearch && <TableHead>Path</TableHead>}
                         <TableHead>Type</TableHead>
                         <TableHead>Size</TableHead>
                         <TableHead>Modified</TableHead>
@@ -298,6 +399,7 @@ export function S3Browser({ actor, buckets }: Readonly<{ actor: Actor; buckets: 
                     <TableBody>
                       {visibleListing.prefixes.map((item) => (
                         <TableRow key={item}>
+                          <TableCell />
                           <TableCell><Button className="h-auto p-0 font-normal" onClick={() => browse(selectedBucket, item)} variant="link"><FolderIcon className="size-3.5" />{item.slice(prefix.length)}</Button></TableCell>
                           <TableCell className="text-muted-foreground">Folder</TableCell>
                           <TableCell className="text-muted-foreground">—</TableCell>
@@ -305,24 +407,64 @@ export function S3Browser({ actor, buckets }: Readonly<{ actor: Actor; buckets: 
                           {actor.role === "admin" && <TableCell>—</TableCell>}
                         </TableRow>
                       ))}
-                      {visibleListing.objects.map((object) => (
-                        <TableRow key={object.key}>
-                          <TableCell><a className="text-foreground underline-offset-4 hover:underline" href={`/api/objects/${encodeURIComponent(selectedBucket)}/${object.key.split("/").map(encodeURIComponent).join("/")}`}>{object.key.slice(prefix.length)}</a></TableCell>
-                          <TableCell className="text-muted-foreground">Object</TableCell>
-                          <TableCell className="font-metadata text-xs text-muted-foreground">{formatBytes(object.size)}</TableCell>
-                          <TableCell className="font-metadata text-xs text-muted-foreground">{formatDate(object.lastModified)}</TableCell>
-                          {actor.role === "admin" && <TableCell><Button onClick={() => setDeleteKey(object.key)} size="sm" variant="destructive"><TrashIcon className="size-3.5" />Delete object</Button></TableCell>}
-                        </TableRow>
-                      ))}
+                      {visibleListing.objects.map((object) => {
+                        const filename = object.key.split("/").at(-1) ?? object.key;
+                        const objectPrefix = containingPrefix(object.key);
+                        return (
+                          <TableRow data-state={selectedKeys.includes(object.key) ? "selected" : undefined} key={object.key}>
+                            <TableCell>
+                              <input
+                                aria-label={`Select ${filename}`}
+                                checked={selectedKeys.includes(object.key)}
+                                className="size-4 cursor-pointer accent-foreground"
+                                onChange={(event) => setSelectedKeys((keys) => event.target.checked ? [...keys, object.key] : keys.filter((key) => key !== object.key))}
+                                type="checkbox"
+                              />
+                            </TableCell>
+                            <TableCell><a className="text-foreground underline-offset-4 hover:underline" href={`/api/objects/${encodeURIComponent(selectedBucket)}/${object.key.split("/").map(encodeURIComponent).join("/")}`}>{hasSearch ? filename : object.key.slice(prefix.length)}</a></TableCell>
+                            {hasSearch && <TableCell><Button aria-label={`Open ${objectPrefix || "Root"}`} className="h-auto p-0 font-metadata text-xs font-normal" onClick={() => browse(selectedBucket, objectPrefix)} variant="link">{objectPrefix || "Root"}</Button></TableCell>}
+                            <TableCell className="text-muted-foreground">Object</TableCell>
+                            <TableCell className="font-metadata text-xs text-muted-foreground">{formatBytes(object.size)}</TableCell>
+                            <TableCell className="font-metadata text-xs text-muted-foreground">{formatDate(object.lastModified)}</TableCell>
+                            {actor.role === "admin" && <TableCell><Button aria-label={`Delete ${filename}`} onClick={() => { setDeleteConfirmation(""); setDeleteKey(object.key); }} size="sm" variant="destructive"><TrashIcon className="size-3.5" />Delete</Button></TableCell>}
+                          </TableRow>
+                        );
+                      })}
                     </TableBody>
                   </Table>
                 )}
-                {!isLoading && visibleListing && shownItemCount === 0 && <p className="py-8 text-center text-sm text-muted-foreground">No folders or objects match this view.</p>}
+                {selectedKeys.length > 0 && (
+                  <aside aria-label="Selected objects" className="flex flex-col gap-3 border border-[#eaeaea] bg-muted/40 p-4 sm:flex-row sm:flex-wrap sm:items-center sm:justify-between">
+                    <p className="text-sm font-medium" aria-live="polite">{selectedKeys.length} selected</p>
+                    <div className="flex flex-wrap gap-2">
+                      <Button aria-label="Download selected as ZIP" disabled={isDownloading} onClick={downloadSelected}><DownloadIcon className="size-4" />{isDownloading ? "Preparing ZIP…" : "Download selected as ZIP"}</Button>
+                      {selectedObject && isPreviewableKey(selectedObject.key) && <Button aria-haspopup="dialog" aria-label="Preview selected file" onClick={() => setPreviewKey(selectedObject.key)} ref={previewButton} variant="outline"><EyeIcon className="size-4" />Preview</Button>}
+                      <Button onClick={() => setSelectedKeys([])} variant="ghost">Clear selection</Button>
+                    </div>
+                  </aside>
+                )}
+                {!isLoading && !isSearching && visibleListing && shownItemCount === 0 && <p className="py-8 text-center text-sm text-muted-foreground">No folders or objects match this view.</p>}
               </div>
             </>
           )}
         </section>
       </section>
+
+      <Dialog open={previewKey !== null} onOpenChange={(open) => !open && setPreviewKey(null)}>
+        <DialogContent className="sm:max-w-4xl" onCloseAutoFocus={(event) => { event.preventDefault(); previewButton.current?.focus(); }}>
+          <DialogHeader>
+            <DialogTitle>Preview {previewFilename}</DialogTitle>
+            <DialogDescription>Preview of the selected object.</DialogDescription>
+          </DialogHeader>
+          {previewUrl && (previewKey?.toLocaleLowerCase().endsWith(".pdf") ? (
+            <iframe className="h-[70vh] w-full" sandbox="" src={previewUrl} title={`Preview ${previewFilename}`} />
+          ) : (
+            // The authenticated preview route streams the original image without Next.js optimization.
+            // eslint-disable-next-line @next/next/no-img-element
+            <img alt={`Preview ${previewFilename}`} className="max-h-[70vh] w-full object-contain" src={previewUrl} />
+          ))}
+        </DialogContent>
+      </Dialog>
 
       <AlertDialog open={deleteKey !== null} onOpenChange={(open) => !open && setDeleteKey(null)}>
         <AlertDialogContent>
