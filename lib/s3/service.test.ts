@@ -118,6 +118,21 @@ describe("S3 service", () => {
     expect(Buffer.concat(chunks).length).toBeGreaterThan(0);
   });
 
+  it("retains directory entries while streaming safe prefix archives", async () => {
+    send.mockResolvedValueOnce({ Contents: [
+      { Key: "reports/nested/", Size: 0 }, { Key: "reports/nested/ไทย.txt", Size: 3 }
+    ] });
+    send.mockResolvedValueOnce({ Body: Readable.from([]) });
+    send.mockResolvedValueOnce({ Body: Readable.from([Buffer.from("one")]) });
+    const archive = await service.getPrefixArchive("reports", "reports/");
+    const names: string[] = [];
+    archive.stream.on("entry", (entry) => names.push(entry.name));
+    for await (const chunk of archive.stream) void chunk;
+
+    expect(names).toEqual(["nested/", "nested/ไทย.txt"]);
+    expect(archive.objectCount).toBe(2);
+  });
+
   it("searches full keys across pages case-insensitively and flags a page bound", async () => {
     const bounded = createS3Service({
       client: { send },
@@ -181,6 +196,29 @@ describe("S3 service", () => {
     expect(send).not.toHaveBeenCalled();
   });
 
+  it("does not count folder markers toward the search result limit", async () => {
+    const bounded = createS3Service({ client: { send }, allowedBuckets: ["reports"], objectMaxBytes: 1, searchMaxResults: 1 });
+    send.mockResolvedValueOnce({ Contents: [{ Key: "reports/", Size: 0 }], NextContinuationToken: "files" });
+    send.mockResolvedValueOnce({ Contents: [
+      { Key: "reports/nested/", Size: 0 }, { Key: "reports/empty.txt", Size: 0 }
+    ] });
+
+    await expect(bounded.searchObjects("reports", "reports")).resolves.toEqual({
+      objects: [{ key: "reports/empty.txt", size: 0, lastModified: undefined }], truncated: true
+    });
+    expect(send).toHaveBeenCalledTimes(2);
+  });
+
+  it("omits the current folder marker from selectable listing objects", async () => {
+    send.mockResolvedValueOnce({ Contents: [
+      { Key: "reports/", Size: 0 }, { Key: "reports/empty.txt", Size: 0 }
+    ] });
+
+    await expect(service.listObjects("reports", "reports/", undefined)).resolves.toMatchObject({
+      objects: [{ key: "reports/empty.txt", size: 0 }]
+    });
+  });
+
   it("serves a server-verified PDF preview inline but rejects SVG", async () => {
     send.mockResolvedValueOnce({ Body: Readable.from("pdf"), ContentType: "application/pdf" });
 
@@ -198,6 +236,27 @@ describe("S3 service", () => {
 
     send.mockResolvedValueOnce({ ContentType: "image/svg+xml" });
     await expect(service.getPreviewObject("reports", "missing-body.svg")).rejects.toThrow(PreviewNotSupportedError);
+  });
+
+  it.each(["getPreviewObject", "getObject"] as const)("constructs usable Unicode filename headers for %s", async (method) => {
+    send.mockResolvedValueOnce({ Body: Readable.from([Buffer.from("pdf")]), ContentType: "application/pdf" });
+    const result = await service[method]("reports", "reports/ไทย 📄.pdf");
+    const response = new Response(Readable.toWeb(result.body as Readable) as ReadableStream, { headers: result.headers });
+    const disposition = response.headers.get("Content-Disposition")!;
+
+    expect(disposition).toMatch(/filename="[\x20-\x7e]+"/);
+    expect(disposition).toContain("filename*=UTF-8''%E0%B9%84%E0%B8%97%E0%B8%A2%20%F0%9F%93%84.pdf");
+    expect(response.headers.get("X-Content-Type-Options")).toBe("nosniff");
+    expect(await response.text()).toBe("pdf");
+  });
+
+  it("encodes quoted and RFC 5987 reserved filename characters in preview headers", async () => {
+    send.mockResolvedValueOnce({ Body: Readable.from([Buffer.from("pdf")]), ContentType: "application/pdf" });
+    const result = await service.getPreviewObject("reports", 'reports/ไทย "draft" (a)*\'.pdf');
+    const response = new Response(Readable.toWeb(result.body as Readable) as ReadableStream, { headers: result.headers });
+
+    expect(response.headers.get("Content-Disposition")).toContain("filename*=UTF-8''%E0%B9%84%E0%B8%97%E0%B8%A2%20%22draft%22%20%28a%29%2A%27.pdf");
+    expect(await response.text()).toBe("pdf");
   });
 
   it("destroys rejected preview bodies before reporting an unsupported media type", async () => {
@@ -227,6 +286,38 @@ describe("S3 service", () => {
   it("rejects unsafe selected keys before fetching object metadata", async () => {
     await expect(service.getSelectedArchive("reports", ["unsafe\u0000.pdf"])).rejects.toThrow(InvalidArchiveSelectionError);
     expect(send).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    "../outside.txt", "nested/../../outside.txt", "/absolute.txt", "C:/absolute.txt",
+    "C:relative.txt", "nested\\outside.txt", "nested/./file.txt", "nested//file.txt", "folder/",
+    "nested/.. /outside.txt", "nested/file.txt.", "nested/file.txt "
+  ])("rejects unsafe archive entry %j before fetching metadata", async (key) => {
+    send.mockImplementation(async (command) => command instanceof HeadObjectCommand
+      ? { ContentLength: 0 } : { Body: Readable.from([]) });
+    await expect(service.getSelectedArchive("reports", [key])).rejects.toThrow(InvalidArchiveSelectionError);
+    expect(send).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ["folder/file.txt", "folder\\file.txt"],
+    ["café.txt", "cafe\u0301.txt"],
+    ["REPORT.txt", "report.txt"]
+  ])("rejects colliding archive entries %j and %j before fetching metadata", async (first, second) => {
+    send.mockImplementation(async (command) => command instanceof HeadObjectCommand
+      ? { ContentLength: 0 } : { Body: Readable.from([]) });
+    await expect(service.getSelectedArchive("reports", [first, second])).rejects.toThrow(InvalidArchiveSelectionError);
+    expect(send).not.toHaveBeenCalled();
+  });
+
+  it.each(["../../outside.txt", "bad\nfile.txt"])("rejects unsafe prefix archive name %j before fetching any bodies", async (name) => {
+    send.mockResolvedValueOnce({ Contents: [
+      { Key: "reports/safe.txt", Size: 1 }, { Key: `reports/${name}`, Size: 1 }
+    ] });
+    send.mockImplementation(async () => ({ Body: Readable.from("x") }));
+
+    await expect(service.getPrefixArchive("reports", "reports/")).rejects.toThrow(InvalidArchiveSelectionError);
+    expect(send.mock.calls.every(([command]) => command instanceof ListObjectsV2Command)).toBe(true);
   });
 
   it("rejects an empty selected archive before fetching object metadata", async () => {
@@ -289,6 +380,44 @@ describe("S3 service", () => {
       expect.any(GetObjectCommand),
       expect.any(GetObjectCommand)
     ]);
+  });
+
+  it.each(["selected", "prefix"] as const)("aborts a %s archive when overwritten objects exceed the actual byte budget", async (kind) => {
+    const limitedService = createS3Service({ client: { send }, allowedBuckets: ["reports"], objectMaxBytes: 1, archiveMaxBytes: 5 });
+    const firstBody = Readable.from([Buffer.from("123")]);
+    const overwrittenBody = Readable.from([Buffer.from("45"), Buffer.from("6")]);
+    if (kind === "selected") {
+      send.mockResolvedValueOnce({ ContentLength: 1 });
+      send.mockResolvedValueOnce({ ContentLength: 1 });
+      send.mockResolvedValueOnce({ ContentLength: 1 });
+    } else {
+      send.mockResolvedValueOnce({ Contents: [
+        { Key: "first.txt", Size: 1 }, { Key: "overwritten.txt", Size: 1 }, { Key: "queued.txt", Size: 1 }
+      ] });
+    }
+    send.mockResolvedValueOnce({ Body: firstBody });
+    send.mockResolvedValueOnce({ Body: overwrittenBody });
+    send.mockResolvedValueOnce({ Body: Readable.from("x") });
+    const archive = kind === "selected"
+      ? await limitedService.getSelectedArchive("reports", ["first.txt", "overwritten.txt", "queued.txt"])
+      : await limitedService.getPrefixArchive("reports", "");
+
+    await expect(async () => {
+      for await (const chunk of archive.stream) void chunk;
+    }).rejects.toThrow(ArchiveLimitError);
+    expect(overwrittenBody.destroyed).toBe(true);
+    expect(send.mock.calls.filter(([command]) => command instanceof GetObjectCommand)).toHaveLength(2);
+  });
+
+  it("accepts an archive at the actual byte limit even when HEAD metadata is stale", async () => {
+    const limitedService = createS3Service({ client: { send }, allowedBuckets: ["reports"], objectMaxBytes: 1, archiveMaxBytes: 5 });
+    send.mockResolvedValueOnce({ ContentLength: 1 });
+    send.mockResolvedValueOnce({ Body: Readable.from([Buffer.from("123"), Buffer.from("45")]) });
+    const archive = await limitedService.getSelectedArchive("reports", ["changed.txt"]);
+
+    const chunks: Buffer[] = [];
+    for await (const chunk of archive.stream) chunks.push(Buffer.from(chunk));
+    expect(Buffer.concat(chunks).subarray(0, 4).toString("hex")).toBe("504b0304");
   });
 
   it("streams selected archives through a constrained connection pool", async () => {

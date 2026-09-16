@@ -8,8 +8,8 @@ import {
   PutObjectCommand,
   type S3Client
 } from "@aws-sdk/client-s3";
-import { Readable } from "node:stream";
-import { finished } from "node:stream/promises";
+import { Readable, Transform } from "node:stream";
+import { pipeline } from "node:stream/promises";
 import { ZipArchive } from "archiver";
 
 import { assertSafeObjectKey, toPrefixMarkerKey } from "@/lib/objects/keys";
@@ -68,14 +68,18 @@ export class InvalidArchiveSelectionError extends Error {
 
 export type ListedObject = OperatorObject;
 
-function attachmentFilename(key: string): string {
+function contentDisposition(disposition: "inline" | "attachment", key: string): string {
   const filename = key.split("/").filter(Boolean).at(-1) || "download";
+  const fallback = filename.replace(/[^\x20-\x7e]|["\\]/g, "_");
+  const header = `${disposition}; filename="${fallback}"`;
+  if (fallback === filename) return header;
 
-  return filename.replaceAll('"', "_").replaceAll("\\", "_");
+  const encoded = encodeURIComponent(filename).replace(/[!'()*]/g, (character) => `%${character.charCodeAt(0).toString(16).toUpperCase()}`);
+  return `${header}; filename*=UTF-8''${encoded}`;
 }
 
 function normalizeListedObject(object: ListedObjectEntry): ListedObject | undefined {
-  if (!object.Key) return undefined;
+  if (!object.Key || object.Key.endsWith("/")) return undefined;
 
   return {
     key: object.Key,
@@ -90,13 +94,34 @@ function isPreviewableContentType(contentType: string | undefined): contentType 
   return mediaType !== undefined && previewableContentTypes.has(mediaType);
 }
 
+function assertArchiveNames(names: readonly string[], allowDirectories = false): void {
+  const normalizedNames = new Set<string>();
+  for (const name of names) {
+    try {
+      assertSafeObjectKey(name);
+    } catch {
+      throw new InvalidArchiveSelectionError();
+    }
+    const path = allowDirectories && name.endsWith("/") ? name.slice(0, -1) : name;
+    // ZIP extractors treat backslashes, drive prefixes, and dot segments as paths.
+    if (/[\\:]/.test(path) || path.split("/").some((part) => !part || /[. ]$/.test(part))) {
+      throw new InvalidArchiveSelectionError();
+    }
+    const normalizedName = path.normalize("NFC").toLowerCase();
+    if (normalizedNames.has(normalizedName)) throw new InvalidArchiveSelectionError();
+    normalizedNames.add(normalizedName);
+  }
+}
+
 function assertSelectedKeys(keys: readonly string[]): string[] {
   if (keys.length === 0 || new Set(keys).size !== keys.length) {
     throw new InvalidArchiveSelectionError();
   }
 
   try {
-    return keys.map(assertSafeObjectKey);
+    const safeKeys = keys.map(assertSafeObjectKey);
+    assertArchiveNames(safeKeys);
+    return safeKeys;
   } catch {
     throw new InvalidArchiveSelectionError();
   }
@@ -124,9 +149,16 @@ function discardBody(body: unknown): void {
   }
 }
 
-function streamSelectedArchive(input: Readonly<{ client: S3ClientLike }>, archive: ZipArchive, bucket: string, keys: readonly string[]): void {
+function streamArchive(
+  input: Readonly<{ client: S3ClientLike }>,
+  archive: ZipArchive,
+  bucket: string,
+  entries: readonly Readonly<{ key: string; name: string }>[],
+  maxBytes: number
+): void {
   const controller = new AbortController();
   let activeBody: Readable | undefined;
+  let streamedBytes = 0;
   let producing = true;
   const cancel = () => {
     controller.abort();
@@ -139,7 +171,7 @@ function streamSelectedArchive(input: Readonly<{ client: S3ClientLike }>, archiv
   archive.once("close", onClose);
   void (async () => {
     try {
-      for (const key of keys) {
+      for (const { key, name } of entries) {
         if (archive.destroyed) return;
 
         const output = await input.client.send(
@@ -153,8 +185,15 @@ function streamSelectedArchive(input: Readonly<{ client: S3ClientLike }>, archiv
         if (!output.Body) throw new Error("S3 returned no object body");
 
         activeBody = output.Body as Readable;
-        const bodyFinished = finished(activeBody);
-        archive.append(activeBody, { name: key });
+        const limitedBody = new Transform({
+          transform(chunk: Buffer, _encoding, callback) {
+            streamedBytes += chunk.length;
+            if (streamedBytes > maxBytes) return callback(new ArchiveLimitError());
+            callback(null, chunk);
+          }
+        });
+        const bodyFinished = pipeline(activeBody, limitedBody, { signal: controller.signal });
+        archive.append(limitedBody, { name });
         await bodyFinished;
         activeBody = undefined;
       }
@@ -242,7 +281,7 @@ export function createS3Service(input: Readonly<{
       return {
         body: output.Body,
         headers: {
-          "Content-Disposition": `attachment; filename="${attachmentFilename(safeKey)}"`,
+          "Content-Disposition": contentDisposition("attachment", safeKey),
           "Content-Type": output.ContentType || "application/octet-stream",
           "X-Content-Type-Options": "nosniff",
           "Cache-Control": "no-store",
@@ -265,7 +304,7 @@ export function createS3Service(input: Readonly<{
       return {
         body: output.Body,
         headers: {
-          "Content-Disposition": `inline; filename="${attachmentFilename(safeKey)}"`,
+          "Content-Disposition": contentDisposition("inline", safeKey),
           "Content-Type": output.ContentType,
           "X-Content-Type-Options": "nosniff",
           "Cache-Control": "no-store"
@@ -331,13 +370,10 @@ export function createS3Service(input: Readonly<{
         continuationToken = page.NextContinuationToken;
       } while (continuationToken);
 
+      const entries = keys.map((object) => ({ key: object.key, name: object.key.slice(prefix.length) || object.key }));
+      assertArchiveNames(entries.map((entry) => entry.name), true);
       const archive = new ZipArchive({ zlib: { level: 6 } });
-      for (const object of keys) {
-        const output = await input.client.send(new GetObjectCommand({ Bucket: bucket, Key: object.key }));
-        if (!output.Body) throw new Error("S3 returned no object body");
-        archive.append(output.Body as Readable, { name: object.key.slice(prefix.length) || object.key });
-      }
-      void archive.finalize();
+      streamArchive(input, archive, bucket, entries, input.archiveMaxBytes ?? DEFAULT_ARCHIVE_MAX_BYTES);
 
       return { stream: archive, objectCount: keys.length, totalSize };
     },
@@ -361,7 +397,7 @@ export function createS3Service(input: Readonly<{
       }
 
       const archive = new ZipArchive({ zlib: { level: 6 } });
-      streamSelectedArchive(input, archive, bucket, selectedKeys);
+      streamArchive(input, archive, bucket, selectedKeys.map((key) => ({ key, name: key })), archiveMaxBytes);
 
       return { stream: archive, objectCount: selectedKeys.length, totalSize };
     }

@@ -1,6 +1,6 @@
 "use client";
 
-import { FormEvent, useEffect, useMemo, useRef, useState } from "react";
+import { FormEvent, useEffect, useId, useMemo, useRef, useState } from "react";
 import { signOut } from "next-auth/react";
 
 import { Badge } from "@/components/ui/badge";
@@ -58,6 +58,7 @@ export function S3Browser({ actor, buckets }: Readonly<{ actor: Actor; buckets: 
   const [deleteConfirmation, setDeleteConfirmation] = useState("");
   const listingRequest = useRef<AbortController | null>(null);
   const previewButton = useRef<HTMLButtonElement | null>(null);
+  const downloadFrameName = `selected-download-${useId()}`;
 
   const canWrite = actor.role === "readwrite" || actor.role === "admin";
   const hasSearch = searchQuery.trim().length > 0;
@@ -143,6 +144,7 @@ export function S3Browser({ actor, buckets }: Readonly<{ actor: Actor; buckets: 
     const form = document.createElement("form");
     form.method = "post";
     form.action = `/api/selected-download/${encodeURIComponent(selectedBucket)}`;
+    form.target = downloadFrameName;
     const input = document.createElement("input");
     input.type = "hidden";
     input.name = "keys";
@@ -223,6 +225,17 @@ export function S3Browser({ actor, buckets }: Readonly<{ actor: Actor; buckets: 
 
   return (
     <main className="mx-auto min-h-screen max-w-7xl px-4 py-6 md:px-8 md:py-10">
+      <iframe
+        hidden
+        name={downloadFrameName}
+        onLoad={(event) => {
+          // Attachments leave the empty frame in place; an HTTP error loads a document.
+          if (event.currentTarget.contentDocument?.URL !== "about:blank") {
+            setStatus("Download could not be completed. Try again.");
+          }
+        }}
+        title="Selected ZIP download"
+      />
       <header className="flex flex-col gap-5 border-b border-[#eaeaea] pb-6 md:flex-row md:items-end md:justify-between">
         <div>
           <p className="font-metadata text-xs uppercase tracking-[0.18em] text-muted-foreground">Internal storage</p>

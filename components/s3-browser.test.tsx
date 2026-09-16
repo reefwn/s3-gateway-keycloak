@@ -202,7 +202,9 @@ describe("S3Browser", () => {
     const fetchMock = await renderBrowserWithListing();
     const blob = vi.spyOn(Response.prototype, "blob");
     let submission: unknown;
+    let downloadTarget: HTMLIFrameElement | undefined;
     const submit = vi.spyOn(HTMLFormElement.prototype, "submit").mockImplementation(function (this: HTMLFormElement) {
+      downloadTarget = [...document.querySelectorAll("iframe")].find((frame) => frame.name === this.target);
       submission = {
         connected: this.isConnected,
         method: this.method,
@@ -215,6 +217,8 @@ describe("S3Browser", () => {
     fireEvent.click(screen.getByRole("checkbox", { name: "Select all visible files" }));
     fireEvent.click(screen.getByRole("button", { name: "Download selected as ZIP" }));
     expect(submit).toHaveBeenCalledTimes(1);
+    expect(downloadTarget).toBeInTheDocument();
+    expect(downloadTarget).toHaveAttribute("hidden");
     expect(submission).toEqual({
       connected: true,
       method: "post",
@@ -227,6 +231,37 @@ describe("S3Browser", () => {
     expect(fetchMock).toHaveBeenCalledTimes(1);
     expect(blob).not.toHaveBeenCalled();
     expect(screen.getByRole("complementary", { name: "Selected objects" })).toHaveTextContent("2 selected");
+  });
+
+  it("keeps the workspace and reports a native download HTTP error document in-app", async () => {
+    const fetchMock = await renderBrowserWithListing();
+    let downloadTarget: HTMLIFrameElement | undefined;
+    let downloadUrl = "";
+    const submit = vi.spyOn(HTMLFormElement.prototype, "submit").mockImplementation(function (this: HTMLFormElement) {
+      downloadTarget = [...document.querySelectorAll("iframe")].find((candidate) => candidate.name === this.target);
+      downloadUrl = this.action;
+    });
+    fireEvent.click(screen.getByRole("checkbox", { name: "Select photo.png" }));
+    fireEvent.click(screen.getByRole("button", { name: "Download selected as ZIP" }));
+
+    expect(submit).toHaveBeenCalledTimes(1);
+    expect(downloadTarget).toBeInTheDocument();
+    const responseDocument = downloadTarget!.contentDocument!;
+    Object.defineProperty(responseDocument, "URL", { configurable: true, value: downloadUrl });
+    responseDocument.body.textContent = JSON.stringify({ error: "Private transport detail" });
+    fireEvent.load(downloadTarget!);
+    expect(screen.getByRole("status")).toHaveTextContent("Download could not be completed. Try again.");
+    expect(screen.getByRole("status")).not.toHaveTextContent("Private");
+    expect(screen.getByRole("textbox", { name: "Search this bucket" })).toBeInTheDocument();
+    expect(screen.getByRole("checkbox", { name: "Select photo.png" })).toBeChecked();
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not report the initial empty download frame as a failure", async () => {
+    await renderBrowserWithListing();
+    const frame = screen.getByTitle("Selected ZIP download");
+    fireEvent.load(frame);
+    expect(screen.queryByRole("status")).not.toBeInTheDocument();
   });
 
   it("keeps selection and removes the temporary form if native submission fails", async () => {
