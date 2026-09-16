@@ -39,8 +39,8 @@ AWS S3 administration or a general S3 proxy API.
 - Bucket creation/deletion, lifecycle management, object-version UI,
   recursive folder deletion, copy/move/rename, multi-cloud backends, or a
   programmatic/public API.
-- Bulk upload or bulk delete. Prefix download is the one bulk operation in
-  scope.
+- Bulk upload and bulk delete. Both prefix ZIP downloads and selected-file ZIP
+  downloads are supported bulk operations.
 - Malware scanning, thumbnails, video processing, or an audit-log UI/export
   facility. The narrowly constrained preview described below is the only
   inline rendering in scope.
