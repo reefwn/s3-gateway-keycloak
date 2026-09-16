@@ -13,7 +13,14 @@ export const runtime = "nodejs";
 
 type Context = { params: Promise<{ bucket: string }> };
 
-function auditContext(request: Request, actor: Awaited<ReturnType<typeof getCurrentActor>>, action: string, bucket: string, objectKey?: string) {
+function auditContext(
+  request: Request,
+  actor: Awaited<ReturnType<typeof getCurrentActor>>,
+  action: string,
+  bucket: string,
+  objectKey?: string,
+  prefix?: string
+) {
   return {
     actorSub: actor.sub,
     username: actor.username,
@@ -21,6 +28,7 @@ function auditContext(request: Request, actor: Awaited<ReturnType<typeof getCurr
     action,
     bucket,
     objectKey,
+    prefix,
     correlationId: crypto.randomUUID(),
     sourceIp: request.headers.get("x-forwarded-for"),
     userAgent: request.headers.get("user-agent")
@@ -31,8 +39,20 @@ export async function GET(request: Request, { params }: Context): Promise<Respon
   try {
     const { bucket } = await params;
     const actor = await requireCapability("list");
-    const prefix = new URL(request.url).searchParams.get("prefix") ?? "";
-    const continuationToken = new URL(request.url).searchParams.get("continuationToken") ?? undefined;
+    const url = new URL(request.url);
+    const search = url.searchParams.get("search");
+
+    if (search?.trim()) {
+      const results = await runAuditedOperation(
+        { audit: auditRepository, context: auditContext(request, actor, "search-objects", bucket, undefined, search) },
+        () => getS3Service().searchObjects(bucket, search)
+      );
+
+      return Response.json(results, { headers: { "Cache-Control": "no-store" } });
+    }
+
+    const prefix = url.searchParams.get("prefix") ?? "";
+    const continuationToken = url.searchParams.get("continuationToken") ?? undefined;
     const listing = await runAuditedOperation(
       { audit: auditRepository, context: auditContext(request, actor, "list-objects", bucket, prefix) },
       () => getS3Service().listObjects(bucket, prefix, continuationToken)
