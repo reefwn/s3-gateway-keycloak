@@ -376,6 +376,29 @@ describe("S3 service", () => {
     expect(send.mock.calls.filter(([command]) => command instanceof GetObjectCommand)).toHaveLength(0);
   });
 
+  it("allows multiple empty selected folders when the expanded object count is within the limit", async () => {
+    const limitedService = createS3Service({
+      client: { send },
+      allowedBuckets: ["reports"],
+      objectMaxBytes: 1,
+      archiveMaxObjects: 1
+    });
+    send
+      .mockResolvedValueOnce({ Contents: [] })
+      .mockResolvedValueOnce({ Contents: [] });
+
+    const archive = await limitedService.getSelectedArchive("reports", ["empty-a/", "empty-b/"]);
+    const chunks: Buffer[] = [];
+    for await (const chunk of archive.stream) chunks.push(Buffer.from(chunk));
+
+    expect(Buffer.concat(chunks).length).toBeGreaterThan(0);
+    expect(archive).toMatchObject({ objectCount: 0, totalSize: 0 });
+    expect(send.mock.calls.map(([command]) => command)).toEqual([
+      expect.any(ListObjectsV2Command),
+      expect.any(ListObjectsV2Command)
+    ]);
+  });
+
   it("rejects expanded selected folders that exceed the object limit before fetching bodies", async () => {
     const limitedService = createS3Service({
       client: { send },

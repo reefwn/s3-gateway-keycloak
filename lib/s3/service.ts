@@ -240,7 +240,7 @@ export function createS3Service(input: Readonly<{
   const resolveArchiveTargets = async (bucket: string, targets: readonly ArchiveTarget[]) => {
     const archiveMaxObjects = input.archiveMaxObjects ?? DEFAULT_ARCHIVE_MAX_OBJECTS;
     const archiveMaxBytes = input.archiveMaxBytes ?? DEFAULT_ARCHIVE_MAX_BYTES;
-    if (targets.length > archiveMaxObjects) throw new ArchiveLimitError();
+    if (targets.filter((target) => target.kind === "object").length > archiveMaxObjects) throw new ArchiveLimitError();
 
     const entries: ArchiveEntry[] = [];
     const resolvedKeys = new Set<string>();
