@@ -8,3 +8,4 @@ coverage
 .codex/
 .impeccable/
 .mcp.json
+.worktrees/
