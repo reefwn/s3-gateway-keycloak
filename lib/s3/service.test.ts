@@ -315,6 +315,28 @@ describe("S3 service", () => {
     expect(send).not.toHaveBeenCalled();
   });
 
+  it("archives distinct exact object keys that share a string prefix", async () => {
+    send
+      .mockResolvedValueOnce({ ContentLength: 6 })
+      .mockResolvedValueOnce({ ContentLength: 7 })
+      .mockResolvedValueOnce({ Body: Readable.from("report") })
+      .mockResolvedValueOnce({ Body: Readable.from("backup!") });
+
+    const archive = await service.getSelectedArchive("reports", ["report.txt", "report.txt.bak"]);
+    const names: string[] = [];
+    archive.stream.on("entry", (entry) => names.push(entry.name));
+    for await (const chunk of archive.stream) void chunk;
+
+    expect(names).toEqual(["report.txt", "report.txt.bak"]);
+    expect(archive).toMatchObject({ objectCount: 2, totalSize: 13 });
+    expect(send.mock.calls.map(([command]) => command)).toEqual([
+      expect.any(HeadObjectCommand),
+      expect.any(HeadObjectCommand),
+      expect.any(GetObjectCommand),
+      expect.any(GetObjectCommand)
+    ]);
+  });
+
   it("expands multiple selected folders and files into bucket-root ZIP entries", async () => {
     send
       .mockResolvedValueOnce({ Contents: [{ Key: "reports/", Size: 0 }, { Key: "reports/jan/a.txt", Size: 1 }], NextContinuationToken: undefined })

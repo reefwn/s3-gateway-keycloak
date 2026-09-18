@@ -133,7 +133,9 @@ function assertArchiveTargets(keys: readonly string[]): ArchiveTarget[] {
     }));
     assertArchiveNames(targets.map(({ key }) => key), true);
     const ordered = [...targets].sort((left, right) => left.key.localeCompare(right.key));
-    if (ordered.some((target, index) => index > 0 && target.key.startsWith(ordered[index - 1].key))) {
+    if (ordered.some((target, index) => index > 0
+      && ordered[index - 1].kind === "prefix"
+      && target.key.startsWith(ordered[index - 1].key))) {
       throw new InvalidArchiveSelectionError();
     }
     return targets;
