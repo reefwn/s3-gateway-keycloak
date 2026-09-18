@@ -66,7 +66,9 @@ export function S3Browser({ actor, buckets }: Readonly<{ actor: Actor; buckets: 
     if (hasSearch) return searchResult && { objects: searchResult.objects, prefixes: [] };
     return listing && filterAndSortListing(listing, "");
   }, [listing, hasSearch, searchResult]);
-  const visibleKeys = visibleListing?.objects.map((object) => object.key) ?? [];
+  const visibleKeys = visibleListing
+    ? [...visibleListing.prefixes, ...visibleListing.objects.map((object) => object.key)]
+    : [];
   const allSelected = visibleKeys.length > 0 && visibleKeys.every((key) => selectedKeys.includes(key));
   const someSelected = visibleKeys.some((key) => selectedKeys.includes(key));
   const selectedObject = selectedKeys.length === 1 ? visibleListing?.objects.find((object) => object.key === selectedKeys[0]) : undefined;
@@ -382,7 +384,7 @@ export function S3Browser({ actor, buckets }: Readonly<{ actor: Actor; buckets: 
                       <TableRow>
                         <TableHead className="w-10">
                           <input
-                            aria-label="Select all visible files"
+                            aria-label="Select all visible items"
                             checked={allSelected}
                             className="size-4 cursor-pointer accent-foreground"
                             disabled={visibleKeys.length === 0}
@@ -402,7 +404,15 @@ export function S3Browser({ actor, buckets }: Readonly<{ actor: Actor; buckets: 
                     <TableBody>
                       {visibleListing.prefixes.map((item) => (
                         <TableRow key={item}>
-                          <TableCell />
+                          <TableCell>
+                            <input
+                              aria-label={`Select ${item}`}
+                              checked={selectedKeys.includes(item)}
+                              className="size-4 cursor-pointer accent-foreground"
+                              onChange={(event) => setSelectedKeys((keys) => event.target.checked ? [...keys, item] : keys.filter((key) => key !== item))}
+                              type="checkbox"
+                            />
+                          </TableCell>
                           <TableCell><Button className="h-auto p-0 font-normal" onClick={() => browse(selectedBucket, item)} variant="link"><FolderIcon className="size-3.5" />{item.slice(prefix.length)}</Button></TableCell>
                           <TableCell className="text-muted-foreground">Folder</TableCell>
                           <TableCell className="text-muted-foreground">—</TableCell>
@@ -437,7 +447,7 @@ export function S3Browser({ actor, buckets }: Readonly<{ actor: Actor; buckets: 
                   </Table>
                 )}
                 {selectedKeys.length > 0 && (
-                  <aside aria-label="Selected objects" className="flex flex-col gap-3 border border-[#eaeaea] bg-muted/40 p-4 sm:flex-row sm:flex-wrap sm:items-center sm:justify-between">
+                  <aside aria-label="Selected items" className="flex flex-col gap-3 border border-[#eaeaea] bg-muted/40 p-4 sm:flex-row sm:flex-wrap sm:items-center sm:justify-between">
                     <p className="text-sm font-medium" aria-live="polite">{selectedKeys.length} selected</p>
                     <div className="flex flex-wrap gap-2">
                       <Button onClick={downloadSelected}><DownloadIcon className="size-4" />Download selected as ZIP</Button>

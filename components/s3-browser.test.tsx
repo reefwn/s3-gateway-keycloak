@@ -121,22 +121,23 @@ describe("S3Browser", () => {
     expect(await screen.findByRole("status")).toHaveTextContent("Could not load this bucket. Try again.");
   });
 
-  it("selects only visible files and keeps select-all in sync with individual selection", async () => {
+  it("selects visible folders and files, while keeping preview file-only", async () => {
     await renderBrowserWithListing();
-    const selectAll = screen.getByRole("checkbox", { name: "Select all visible files" });
-    fireEvent.click(screen.getByRole("checkbox", { name: "Select photo.png" }));
+    fireEvent.click(screen.getByRole("checkbox", { name: "Select archive/" }));
+
+    expect(screen.getByRole("complementary", { name: "Selected items" })).toHaveTextContent("1 selected");
+    expect(screen.queryByRole("button", { name: "Preview selected file" })).not.toBeInTheDocument();
+
+    const selectAll = screen.getByRole("checkbox", { name: "Select all visible items" });
     expect(selectAll).toBePartiallyChecked();
     fireEvent.click(selectAll);
-    const panel = screen.getByRole("complementary", { name: "Selected objects" });
-    expect(panel).toHaveTextContent("2 selected");
+    expect(screen.getByRole("complementary", { name: "Selected items" })).toHaveTextContent("3 selected");
     expect(selectAll).toBeChecked();
-    expect(within(panel).getByRole("button", { name: "Download selected as ZIP" })).toBeEnabled();
-    expect(screen.queryByRole("checkbox", { name: /archive/i })).not.toBeInTheDocument();
     fireEvent.click(selectAll);
-    expect(screen.queryByRole("complementary", { name: "Selected objects" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("complementary", { name: "Selected items" })).not.toBeInTheDocument();
   });
 
-  it("clears the selected objects with the selection panel action", async () => {
+  it("clears the selected items with the selection panel action", async () => {
     await renderBrowserWithListing();
     fireEvent.click(screen.getByRole("checkbox", { name: "Select photo.png" }));
     fireEvent.click(screen.getByRole("button", { name: "Clear selection" }));
@@ -149,8 +150,11 @@ describe("S3Browser", () => {
     fetchMock.mockImplementationOnce(async () => jsonResponse({ objects: [], prefixes: [] }));
     fireEvent.click(screen.getByRole("checkbox", { name: "Select photo.png" }));
     fireEvent.click(screen.getByRole("button", { name: action }));
-    expect(screen.queryByRole("complementary", { name: "Selected objects" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("complementary", { name: "Selected items" })).not.toBeInTheDocument();
     await waitFor(() => expect(screen.queryByText("Loading index")).not.toBeInTheDocument());
+    if (action === "archive/") {
+      expect(fetchMock).toHaveBeenLastCalledWith("/api/objects/reports?prefix=archive%2F", expect.anything());
+    }
     expect(screen.queryByRole("button", { name: "Preview selected file" })).not.toBeInTheDocument();
   });
 
@@ -214,7 +218,7 @@ describe("S3Browser", () => {
         inputType: this.querySelector('[name="keys"]')?.getAttribute("type")
       };
     });
-    fireEvent.click(screen.getByRole("checkbox", { name: "Select all visible files" }));
+    fireEvent.click(screen.getByRole("checkbox", { name: "Select all visible items" }));
     fireEvent.click(screen.getByRole("button", { name: "Download selected as ZIP" }));
     expect(submit).toHaveBeenCalledTimes(1);
     expect(downloadTarget).toBeInTheDocument();
@@ -224,13 +228,13 @@ describe("S3Browser", () => {
       method: "post",
       action: `${window.location.origin}/api/selected-download/reports`,
       encoding: "application/x-www-form-urlencoded",
-      fields: [["keys", '["notes.txt","photo.png"]']],
+      fields: [["keys", '["archive/","notes.txt","photo.png"]']],
       inputType: "hidden"
     });
     expect(submit.mock.contexts[0]).not.toBeInTheDocument();
     expect(fetchMock).toHaveBeenCalledTimes(1);
     expect(blob).not.toHaveBeenCalled();
-    expect(screen.getByRole("complementary", { name: "Selected objects" })).toHaveTextContent("2 selected");
+    expect(screen.getByRole("complementary", { name: "Selected items" })).toHaveTextContent("3 selected");
   });
 
   it("keeps the workspace and reports a native download HTTP error document in-app", async () => {
@@ -285,7 +289,7 @@ describe("S3Browser", () => {
     fireEvent.click(screen.getByRole("checkbox", { name: "Select photo.png" }));
     const search = screen.getByRole("textbox", { name: "Search this bucket" });
     fireEvent.change(search, { target: { value: "rep" } });
-    expect(screen.queryByRole("complementary", { name: "Selected objects" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("complementary", { name: "Selected items" })).not.toBeInTheDocument();
     expect(screen.queryByRole("link", { name: "photo.png" })).not.toBeInTheDocument();
     await act(async () => { vi.advanceTimersByTime(200); });
     fireEvent.change(search, { target: { value: " report " } });
@@ -303,13 +307,13 @@ describe("S3Browser", () => {
     const openPath = await screen.findByRole("button", { name: "Open archive/2026/" });
     expect(screen.getByText("Results are partial. Refine your search.")).toBeInTheDocument();
     expect(screen.queryByRole("link", { name: "photo.png" })).not.toBeInTheDocument();
-    fireEvent.click(screen.getByRole("checkbox", { name: "Select all visible files" }));
-    expect(screen.getByRole("complementary", { name: "Selected objects" })).toHaveTextContent("1 selected");
+    fireEvent.click(screen.getByRole("checkbox", { name: "Select all visible items" }));
+    expect(screen.getByRole("complementary", { name: "Selected items" })).toHaveTextContent("1 selected");
     fetchMock.mockResolvedValueOnce(jsonResponse({ objects: [{ key: "archive/2026/report.pdf", size: 4 }], prefixes: [] }));
     fireEvent.click(openPath);
     expect(fetchMock).toHaveBeenLastCalledWith("/api/objects/reports?prefix=archive%2F2026%2F", expect.anything());
     expect(screen.getByRole("textbox", { name: "Search this bucket" })).toHaveValue("");
-    expect(screen.queryByRole("complementary", { name: "Selected objects" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("complementary", { name: "Selected items" })).not.toBeInTheDocument();
     expect(screen.queryByText("Results are partial. Refine your search.")).not.toBeInTheDocument();
     expect(await screen.findByRole("link", { name: "report.pdf" })).toBeInTheDocument();
   });
@@ -322,7 +326,7 @@ describe("S3Browser", () => {
     fireEvent.click(await screen.findByRole("checkbox", { name: "Select report.pdf" }));
     fireEvent.change(search, { target: { value: "" } });
     expect(screen.getByRole("link", { name: "photo.png" })).toBeInTheDocument();
-    expect(screen.queryByRole("complementary", { name: "Selected objects" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("complementary", { name: "Selected items" })).not.toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "Preview selected file" })).not.toBeInTheDocument();
   });
 
@@ -358,7 +362,7 @@ describe("S3Browser", () => {
     const fetchMock = await renderBrowserWithListing("admin", { objects: [{ key: "archive/photo.png", size: 4 }], prefixes: [] });
     const row = screen.getByRole("link", { name: "archive/photo.png" }).closest("tr")!;
     fireEvent.click(screen.getByRole("checkbox", { name: "Select photo.png" }));
-    expect(within(screen.getByRole("complementary", { name: "Selected objects" })).queryByRole("button", { name: /delete/i })).not.toBeInTheDocument();
+    expect(within(screen.getByRole("complementary", { name: "Selected items" })).queryByRole("button", { name: /delete/i })).not.toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "Delete object" })).not.toBeInTheDocument();
     fireEvent.click(within(row).getByRole("button", { name: "Delete photo.png" }));
     const dialog = screen.getByRole("alertdialog", { name: "Delete object" });
@@ -372,6 +376,6 @@ describe("S3Browser", () => {
     fireEvent.click(confirm);
     await waitFor(() => expect(screen.queryByRole("link", { name: "archive/photo.png" })).not.toBeInTheDocument());
     expect(fetchMock).toHaveBeenCalledWith("/api/objects/reports/archive/photo.png", { method: "DELETE", headers: { "x-s3-confirm-key": "archive/photo.png" } });
-    expect(screen.queryByRole("complementary", { name: "Selected objects" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("complementary", { name: "Selected items" })).not.toBeInTheDocument();
   });
 });
