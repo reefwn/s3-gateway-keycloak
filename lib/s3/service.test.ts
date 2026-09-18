@@ -290,7 +290,7 @@ describe("S3 service", () => {
 
   it.each([
     "../outside.txt", "nested/../../outside.txt", "/absolute.txt", "C:/absolute.txt",
-    "C:relative.txt", "nested\\outside.txt", "nested/./file.txt", "nested//file.txt", "folder/",
+    "C:relative.txt", "nested\\outside.txt", "nested/./file.txt", "nested//file.txt",
     "nested/.. /outside.txt", "nested/file.txt.", "nested/file.txt "
   ])("rejects unsafe archive entry %j before fetching metadata", async (key) => {
     send.mockImplementation(async (command) => command instanceof HeadObjectCommand
@@ -313,6 +313,83 @@ describe("S3 service", () => {
   it("rejects selected archive file entries that are ancestors of another entry before fetching metadata", async () => {
     await expect(service.getSelectedArchive("reports", ["folder", "folder/file.txt"])).rejects.toThrow(InvalidArchiveSelectionError);
     expect(send).not.toHaveBeenCalled();
+  });
+
+  it("expands multiple selected folders and files into bucket-root ZIP entries", async () => {
+    send
+      .mockResolvedValueOnce({ Contents: [{ Key: "reports/", Size: 0 }, { Key: "reports/jan/a.txt", Size: 1 }], NextContinuationToken: undefined })
+      .mockResolvedValueOnce({ Contents: [{ Key: "photos/p.png", Size: 2 }] })
+      .mockResolvedValueOnce({ ContentLength: 3 })
+      .mockResolvedValueOnce({ Body: Readable.from([]) })
+      .mockResolvedValueOnce({ Body: Readable.from("a") })
+      .mockResolvedValueOnce({ Body: Readable.from("p!") })
+      .mockResolvedValueOnce({ Body: Readable.from("log") });
+
+    const archive = await service.getSelectedArchive("reports", ["reports/", "photos/", "top-level.log"]);
+    const names: string[] = [];
+    archive.stream.on("entry", (entry) => names.push(entry.name));
+    for await (const chunk of archive.stream) void chunk;
+
+    expect(names).toEqual(["reports/", "reports/jan/a.txt", "photos/p.png", "top-level.log"]);
+    expect(archive).toMatchObject({ objectCount: 4, totalSize: 6 });
+  });
+
+  it.each([
+    ["reports/", "reports/jan/"],
+    ["reports/", "reports/jan/a.txt"],
+    ["report.txt", "report.txt"]
+  ])("rejects overlapping or duplicate archive targets %j and %j before S3 access", async (first, second) => {
+    await expect(service.getSelectedArchive("reports", [first, second])).rejects.toThrow(InvalidArchiveSelectionError);
+    expect(send).not.toHaveBeenCalled();
+  });
+
+  it("expands every page of a selected folder in listing order", async () => {
+    send
+      .mockResolvedValueOnce({ Contents: [{ Key: "reports/a.txt", Size: 1 }], NextContinuationToken: "next" })
+      .mockResolvedValueOnce({ Contents: [{ Key: "reports/b.txt", Size: 2 }] })
+      .mockResolvedValueOnce({ Body: Readable.from("a") })
+      .mockResolvedValueOnce({ Body: Readable.from("bb") });
+
+    const archive = await service.getSelectedArchive("reports", ["reports/"]);
+    const names: string[] = [];
+    archive.stream.on("entry", (entry) => names.push(entry.name));
+    for await (const chunk of archive.stream) void chunk;
+
+    expect(names).toEqual(["reports/a.txt", "reports/b.txt"]);
+    expect(archive).toMatchObject({ objectCount: 2, totalSize: 3 });
+    expect((send.mock.calls[1][0] as ListObjectsV2Command).input).toMatchObject({
+      Bucket: "reports",
+      Prefix: "reports/",
+      ContinuationToken: "next"
+    });
+  });
+
+  it("returns an empty archive when a selected folder has no objects", async () => {
+    send.mockResolvedValueOnce({ Contents: [] });
+
+    const archive = await service.getSelectedArchive("reports", ["empty/"]);
+    const chunks: Buffer[] = [];
+    for await (const chunk of archive.stream) chunks.push(Buffer.from(chunk));
+
+    expect(Buffer.concat(chunks).length).toBeGreaterThan(0);
+    expect(archive).toMatchObject({ objectCount: 0, totalSize: 0 });
+    expect(send.mock.calls.filter(([command]) => command instanceof GetObjectCommand)).toHaveLength(0);
+  });
+
+  it("rejects expanded selected folders that exceed the object limit before fetching bodies", async () => {
+    const limitedService = createS3Service({
+      client: { send },
+      allowedBuckets: ["reports"],
+      objectMaxBytes: 1,
+      archiveMaxObjects: 1
+    });
+    send.mockResolvedValueOnce({ Contents: [
+      { Key: "reports/a.txt", Size: 1 },
+      { Key: "reports/b.txt", Size: 1 }
+    ] });
+
+    await expect(limitedService.getSelectedArchive("reports", ["reports/"])).rejects.toThrow(ArchiveLimitError);
+    expect(send.mock.calls.filter(([command]) => command instanceof GetObjectCommand)).toHaveLength(0);
   });
 
   it("rejects prefix archive file entries that are ancestors of another entry before fetching bodies", async () => {
