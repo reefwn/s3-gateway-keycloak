@@ -38,7 +38,7 @@ async function selectedKeys(request: Request): Promise<string[] | undefined> {
 }
 
 function invalidSelectionResponse(): Response {
-  return Response.json({ error: "Select one or more unique objects" }, { status: 400, headers: { "Cache-Control": "no-store" } });
+  return Response.json({ error: "Select one or more unique items" }, { status: 400, headers: { "Cache-Control": "no-store" } });
 }
 
 export async function POST(request: Request, { params }: Context): Promise<Response> {

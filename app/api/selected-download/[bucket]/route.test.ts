@@ -94,7 +94,7 @@ describe("POST /api/selected-download/[bucket]", () => {
     const response = await POST(selectedRequest({ keys: "report.pdf" }), context);
 
     expect(response.status).toBe(400);
-    await expect(response.json()).resolves.toEqual({ error: "Select one or more unique objects" });
+    await expect(response.json()).resolves.toEqual({ error: "Select one or more unique items" });
     expect(mocks.transferAcquire).not.toHaveBeenCalled();
     expect(mocks.service.getSelectedArchive).not.toHaveBeenCalled();
   });
@@ -127,7 +127,7 @@ describe("POST /api/selected-download/[bucket]", () => {
 
     expect(response.status).toBe(400);
     expect(response.headers.get("Cache-Control")).toBe("no-store");
-    await expect(response.json()).resolves.toEqual({ error: "Select one or more unique objects" });
+    await expect(response.json()).resolves.toEqual({ error: "Select one or more unique items" });
     expect(mocks.transferAcquire).not.toHaveBeenCalled();
     expect(mocks.service.getSelectedArchive).not.toHaveBeenCalled();
   });
@@ -216,6 +216,22 @@ describe("POST /api/selected-download/[bucket]", () => {
     await response.arrayBuffer();
     await vi.waitFor(() => expect(mocks.recordOutcome).toHaveBeenCalledWith(undefined, { objectCount: 2, totalSize: 32 }));
     expect(mocks.transferRelease).toHaveBeenCalledTimes(1);
+  });
+
+  it.each(requestFormats)("passes a selected folder in a $name body to the archive service", async ({ request }) => {
+    const stream = Readable.from([Buffer.from("zip")]);
+    mocks.service.getSelectedArchive.mockResolvedValue({ stream, objectCount: 2, totalSize: 8 });
+
+    const response = await POST(request(["reports/", "top-level.log"]), context);
+
+    expect(response.status).toBe(200);
+    expect(mocks.service.getSelectedArchive).toHaveBeenCalledWith("reports", ["reports/", "top-level.log"]);
+    expect(mocks.beginAuditedStream).toHaveBeenCalledWith(
+      expect.objectContaining({ context: expect.objectContaining({ action: "selected-download", prefix: "selected:2" }) }),
+      expect.any(Function)
+    );
+
+    await response.arrayBuffer();
   });
 
   it("records selected archive stream failures with archive details only once", async () => {

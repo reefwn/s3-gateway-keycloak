@@ -17,6 +17,8 @@ import { type OperatorObject, type OperatorSearchResult } from "@/lib/objects/op
 
 type S3ClientLike = Pick<S3Client, "send">;
 type ListedObjectEntry = Readonly<{ Key?: string; Size?: number; LastModified?: Date }>;
+type ArchiveTarget = Readonly<{ key: string; kind: "object" | "prefix" }>;
+type ArchiveEntry = Readonly<{ key: string; size: number }>;
 
 const DEFAULT_ARCHIVE_MAX_BYTES = 2 * 1024 * 1024 * 1024;
 const DEFAULT_ARCHIVE_MAX_OBJECTS = 1000;
@@ -122,15 +124,21 @@ function assertArchiveNames(names: readonly string[], allowDirectories = false):
   }
 }
 
-function assertSelectedKeys(keys: readonly string[]): string[] {
-  if (keys.length === 0 || new Set(keys).size !== keys.length) {
-    throw new InvalidArchiveSelectionError();
-  }
-
+function assertArchiveTargets(keys: readonly string[]): ArchiveTarget[] {
+  if (keys.length === 0) throw new InvalidArchiveSelectionError();
   try {
-    const safeKeys = keys.map(assertSafeObjectKey);
-    assertArchiveNames(safeKeys);
-    return safeKeys;
+    const targets = keys.map((key) => ({
+      key: assertSafeObjectKey(key),
+      kind: key.endsWith("/") ? "prefix" as const : "object" as const
+    }));
+    assertArchiveNames(targets.map(({ key }) => key), true);
+    const ordered = [...targets].sort((left, right) => left.key.localeCompare(right.key));
+    if (ordered.some((target, index) => index > 0
+      && ordered[index - 1].kind === "prefix"
+      && target.key.startsWith(ordered[index - 1].key))) {
+      throw new InvalidArchiveSelectionError();
+    }
+    return targets;
   } catch {
     throw new InvalidArchiveSelectionError();
   }
@@ -229,6 +237,51 @@ export function createS3Service(input: Readonly<{
 }>) {
   const assertAllowedBucket = (bucket: string) => {
     if (!input.allowedBuckets.includes(bucket)) throw new AllowedBucketError();
+  };
+
+  const resolveArchiveTargets = async (bucket: string, targets: readonly ArchiveTarget[]) => {
+    const archiveMaxObjects = input.archiveMaxObjects ?? DEFAULT_ARCHIVE_MAX_OBJECTS;
+    const archiveMaxBytes = input.archiveMaxBytes ?? DEFAULT_ARCHIVE_MAX_BYTES;
+    if (targets.filter((target) => target.kind === "object").length > archiveMaxObjects) throw new ArchiveLimitError();
+
+    const entries: ArchiveEntry[] = [];
+    const resolvedKeys = new Set<string>();
+    let totalSize = 0;
+    const addEntry = (key: string, size: number) => {
+      if (!Number.isFinite(size) || size < 0) throw new ArchiveLimitError();
+      if (resolvedKeys.has(key)) throw new InvalidArchiveSelectionError();
+
+      resolvedKeys.add(key);
+      entries.push({ key, size });
+      totalSize += size;
+      if (entries.length > archiveMaxObjects || totalSize > archiveMaxBytes) throw new ArchiveLimitError();
+    };
+
+    for (const target of targets) {
+      if (target.kind === "object") {
+        const output = await input.client.send(new HeadObjectCommand({ Bucket: bucket, Key: target.key }));
+        const size = output.ContentLength;
+        if (typeof size !== "number") throw new ArchiveLimitError();
+        addEntry(target.key, size);
+        continue;
+      }
+
+      let continuationToken: string | undefined;
+      do {
+        const page = await input.client.send(
+          new ListObjectsV2Command({ Bucket: bucket, Prefix: target.key, ContinuationToken: continuationToken })
+        );
+        for (const object of page.Contents ?? []) {
+          if (!object.Key) continue;
+          const size = object.Size;
+          if (typeof size !== "number") throw new ArchiveLimitError();
+          addEntry(object.Key, size);
+        }
+        continuationToken = page.NextContinuationToken;
+      } while (continuationToken);
+    }
+
+    return { entries, totalSize };
   };
 
   return {
@@ -389,26 +442,15 @@ export function createS3Service(input: Readonly<{
 
     async getSelectedArchive(bucket: string, keys: readonly string[]) {
       assertAllowedBucket(bucket);
-      const selectedKeys = assertSelectedKeys(keys);
-      const archiveMaxObjects = input.archiveMaxObjects ?? DEFAULT_ARCHIVE_MAX_OBJECTS;
+      const targets = assertArchiveTargets(keys);
       const archiveMaxBytes = input.archiveMaxBytes ?? DEFAULT_ARCHIVE_MAX_BYTES;
+      const { entries, totalSize } = await resolveArchiveTargets(bucket, targets);
 
-      if (selectedKeys.length > archiveMaxObjects) throw new ArchiveLimitError();
-
-      let totalSize = 0;
-      for (const key of selectedKeys) {
-        const output = await input.client.send(new HeadObjectCommand({ Bucket: bucket, Key: key }));
-        const size = output.ContentLength;
-        if (typeof size !== "number" || !Number.isSafeInteger(size) || size < 0) throw new ArchiveLimitError();
-
-        totalSize += size;
-        if (totalSize > archiveMaxBytes) throw new ArchiveLimitError();
-      }
-
+      assertArchiveNames(entries.map(({ key }) => key), true);
       const archive = new ZipArchive({ zlib: { level: 6 } });
-      streamArchive(input, archive, bucket, selectedKeys.map((key) => ({ key, name: key })), archiveMaxBytes);
+      streamArchive(input, archive, bucket, entries.map(({ key }) => ({ key, name: key })), archiveMaxBytes);
 
-      return { stream: archive, objectCount: selectedKeys.length, totalSize };
+      return { stream: archive, objectCount: entries.length, totalSize };
     }
   };
 }
