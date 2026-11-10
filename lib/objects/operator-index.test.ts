@@ -1,6 +1,15 @@
 import { describe, expect, it } from "vitest";
 
-import { containingPrefix, filterAndSortListing, isPreviewableKey, parentPrefix, prefixSegments } from "@/lib/objects/operator-index";
+import {
+  buildBrowserRows,
+  containingPrefix,
+  filterAndSortListing,
+  isPreviewableKey,
+  paginateRows,
+  parentPrefix,
+  prefixSegments,
+  sortBrowserRows,
+} from "@/lib/objects/operator-index";
 
 describe("operator index helpers", () => {
   it("returns a parent prefix without escaping the bucket root", () => {
@@ -40,5 +49,15 @@ describe("operator index helpers", () => {
       objects: [{ key: "reports/notes.txt", size: 7 }],
     });
     expect(listing.prefixes).toEqual(["reports/Archive/", "reports/current/"]);
+  });
+
+  it("sorts and paginates table rows by display name", () => {
+    const rows = buildBrowserRows(
+      { prefixes: ["b-folder/"], objects: [{ key: "a-file.txt", size: 1 }] },
+      "",
+      false
+    );
+    expect(sortBrowserRows(rows, "desc").map((row) => row.name)).toEqual(["b-folder/", "a-file.txt"]);
+    expect(paginateRows(sortBrowserRows(rows, "asc"), 1, 1)).toMatchObject({ page: 1, total: 2, totalPages: 2, rows: [{ name: "a-file.txt" }] });
   });
 });

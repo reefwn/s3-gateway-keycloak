@@ -145,7 +145,8 @@ describe("S3 service", () => {
 
     await expect(bounded.searchObjects("reports", "report")).resolves.toEqual({
       objects: [{ key: "2026/Annual-REPORT.pdf", size: 8, lastModified: undefined }],
-      truncated: true
+      truncated: true,
+      continuationToken: "next",
     });
     expect((send.mock.calls[0][0] as ListObjectsV2Command).input).not.toHaveProperty("Delimiter");
   });
@@ -186,7 +187,8 @@ describe("S3 service", () => {
 
     await expect(bounded.searchObjects("reports", "reports")).resolves.toEqual({
       objects: [{ key: "reports/one.pdf", size: 1, lastModified: undefined }],
-      truncated: true
+      truncated: true,
+      continuationToken: "next",
     });
     expect(send).toHaveBeenCalledTimes(1);
   });
