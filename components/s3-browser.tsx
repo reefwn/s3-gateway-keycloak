@@ -11,7 +11,28 @@ import { Input } from "@/components/ui/input";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { ArchiveIcon, BucketIcon, ChevronLeftIcon, DownloadIcon, EyeIcon, FolderIcon, RefreshIcon, SearchIcon, SignOutIcon, TrashIcon, UploadIcon } from "@/components/ui-icons";
 import type { Actor } from "@/lib/auth/session";
-import { containingPrefix, filterAndSortListing, isPreviewableKey, parentPrefix, prefixSegments, type OperatorListing, type OperatorSearchResult } from "@/lib/objects/operator-index";
+import {
+  buildBrowserRows,
+  containingPrefix,
+  filterAndSortListing,
+  isPreviewableKey,
+  PAGE_SIZE_OPTIONS,
+  paginateRows,
+  parentPrefix,
+  prefixSegments,
+  sortBrowserRows,
+  type NameSortDirection,
+  type OperatorListing,
+  type OperatorListingPage,
+  type OperatorSearchResult,
+  type BrowserRow,
+  type PageSize,
+} from "@/lib/objects/operator-index";
+
+function rowSelectionLabel(row: BrowserRow): string {
+  if (row.kind === "prefix") return row.name;
+  return row.object.key.split("/").at(-1) ?? row.name;
+}
 
 function formatBytes(bytes: number): string {
   if (bytes < 1024) return `${bytes} B`;
@@ -56,6 +77,10 @@ export function S3Browser({ actor, buckets }: Readonly<{ actor: Actor; buckets: 
   const [folderOpen, setFolderOpen] = useState(false);
   const [deleteKey, setDeleteKey] = useState<string | null>(null);
   const [deleteConfirmation, setDeleteConfirmation] = useState("");
+  const [tablePage, setTablePage] = useState(1);
+  const [pageSize, setPageSize] = useState<PageSize>(25);
+  const [nameSort, setNameSort] = useState<NameSortDirection>("asc");
+  const [searchScanExhausted, setSearchScanExhausted] = useState(false);
   const listingRequest = useRef<AbortController | null>(null);
   const previewButton = useRef<HTMLButtonElement | null>(null);
   const downloadFrameName = `selected-download-${useId()}`;
@@ -66,14 +91,20 @@ export function S3Browser({ actor, buckets }: Readonly<{ actor: Actor; buckets: 
     if (hasSearch) return searchResult && { objects: searchResult.objects, prefixes: [] };
     return listing && filterAndSortListing(listing, "");
   }, [listing, hasSearch, searchResult]);
-  const visibleKeys = visibleListing
-    ? [...visibleListing.prefixes, ...visibleListing.objects.map((object) => object.key)]
-    : [];
-  const allSelected = visibleKeys.length > 0 && visibleKeys.every((key) => selectedKeys.includes(key));
-  const someSelected = visibleKeys.some((key) => selectedKeys.includes(key));
+  const tableRows = useMemo(() => {
+    if (!visibleListing) return [];
+    return sortBrowserRows(buildBrowserRows(visibleListing, prefix, hasSearch), nameSort);
+  }, [visibleListing, prefix, hasSearch, nameSort]);
+  const pagination = useMemo(() => paginateRows(tableRows, tablePage, pageSize), [tableRows, tablePage, pageSize]);
+  const pageRows = pagination.rows;
+  const pageKeys = pageRows.map((row) => row.key);
+  const allSelected = pageKeys.length > 0 && pageKeys.every((key) => selectedKeys.includes(key));
+  const someSelected = pageKeys.some((key) => selectedKeys.includes(key));
   const selectedObject = selectedKeys.length === 1 ? visibleListing?.objects.find((object) => object.key === selectedKeys[0]) : undefined;
   const crumbs = prefixSegments(prefix);
-  const shownItemCount = visibleListing ? visibleListing.prefixes.length + visibleListing.objects.length : 0;
+  const shownItemCount = pagination.total;
+  const pageStart = shownItemCount === 0 ? 0 : (pagination.page - 1) * pageSize + 1;
+  const pageEnd = shownItemCount === 0 ? 0 : Math.min(pagination.page * pageSize, shownItemCount);
   const previewFilename = previewKey?.split("/").at(-1) ?? "";
   const previewUrl = selectedBucket && previewKey && isPreviewableKey(previewKey)
     ? `/api/object-preview/${encodeURIComponent(selectedBucket)}/${previewKey.split("/").map(encodeURIComponent).join("/")}`
@@ -93,7 +124,10 @@ export function S3Browser({ actor, buckets }: Readonly<{ actor: Actor; buckets: 
           return;
         }
         const result = (await response.json()) as OperatorSearchResult;
-        if (!controller.signal.aborted) setSearchResult(result);
+        if (!controller.signal.aborted) {
+          setSearchResult(result);
+          setSearchScanExhausted(!result.truncated);
+        }
       } catch {
         if (!controller.signal.aborted) setStatus("Could not search this bucket. Try again.");
       } finally {
@@ -109,10 +143,48 @@ export function S3Browser({ actor, buckets }: Readonly<{ actor: Actor; buckets: 
   function changeSearchQuery(value: string) {
     setSearchQuery(value);
     setSearchResult(null);
+    setSearchScanExhausted(false);
     setSelectedKeys([]);
     setPreviewKey(null);
     setStatus("");
+    setTablePage(1);
     setIsSearching(value.trim().length > 0);
+  }
+
+  async function loadMoreSearchResults() {
+    const query = searchQuery.trim();
+    if (!selectedBucket || !query || !searchResult?.continuationToken) return;
+    setIsSearching(true);
+    setStatus("");
+    try {
+      const params = new URLSearchParams({ search: query, searchContinuationToken: searchResult.continuationToken });
+      const response = await fetch(`/api/objects/${encodeURIComponent(selectedBucket)}?${params.toString()}`, { cache: "no-store" });
+      if (!response.ok) {
+        setStatus("Could not search this bucket. Try again.");
+        return;
+      }
+      const next = (await response.json()) as OperatorSearchResult;
+      const mergedKeys = new Set(searchResult.objects.map((object) => object.key));
+      const appended = next.objects.filter((object) => !mergedKeys.has(object.key));
+      setSearchResult({
+        objects: [...searchResult.objects, ...appended],
+        truncated: next.truncated,
+        continuationToken: next.continuationToken,
+      });
+      setSearchScanExhausted(!next.truncated);
+    } catch {
+      setStatus("Could not search this bucket. Try again.");
+    } finally {
+      setIsSearching(false);
+    }
+  }
+
+  async function fetchListingPage(bucket: string, nextPrefix: string, continuationToken: string | undefined, signal: AbortSignal) {
+    const params = new URLSearchParams({ prefix: nextPrefix });
+    if (continuationToken) params.set("continuationToken", continuationToken);
+    const response = await fetch(`/api/objects/${encodeURIComponent(bucket)}?${params.toString()}`, { cache: "no-store", signal });
+    if (!response.ok) throw new Error("listing failed");
+    return (await response.json()) as OperatorListingPage;
   }
 
   async function browse(bucket: string, nextPrefix = "") {
@@ -121,18 +193,22 @@ export function S3Browser({ actor, buckets }: Readonly<{ actor: Actor; buckets: 
     listingRequest.current = controller;
     setSelectedBucket(bucket);
     setPrefix(nextPrefix);
+    setTablePage(1);
     changeSearchQuery("");
     setListing(null);
     setIsLoading(true);
 
     try {
-      const response = await fetch(`/api/objects/${encodeURIComponent(bucket)}?prefix=${encodeURIComponent(nextPrefix)}`, { cache: "no-store", signal: controller.signal });
-      if (!response.ok) {
-        if (!controller.signal.aborted) setStatus("Not found or not permitted");
-        return;
-      }
-      const result = (await response.json()) as OperatorListing;
-      if (!controller.signal.aborted) setListing(result);
+      const objects: OperatorListing["objects"][number][] = [];
+      const prefixes: string[] = [];
+      let continuationToken: string | undefined;
+      do {
+        const page = await fetchListingPage(bucket, nextPrefix, continuationToken, controller.signal);
+        prefixes.push(...page.prefixes);
+        objects.push(...page.objects);
+        continuationToken = page.nextContinuationToken;
+      } while (continuationToken && !controller.signal.aborted);
+      if (!controller.signal.aborted) setListing({ prefixes, objects });
     } catch {
       if (!controller.signal.aborted) setStatus("Could not load this bucket. Try again.");
     } finally {
@@ -251,12 +327,15 @@ export function S3Browser({ actor, buckets }: Readonly<{ actor: Actor; buckets: 
       </header>
 
       <section className="mt-6 grid gap-6 lg:grid-cols-[15rem_minmax(0,1fr)]">
-        <aside className="border border-[#eaeaea] bg-white p-3" aria-label="Approved buckets">
-          <div className="mb-3 px-2 pt-1">
+        <aside
+          className="flex max-h-[min(20rem,calc(100dvh-7rem))] min-h-0 flex-col border border-[#eaeaea] bg-white p-3 lg:sticky lg:top-6 lg:max-h-[calc(100dvh-3rem)] lg:self-start md:top-10 md:max-h-[calc(100dvh-5rem)]"
+          aria-label="Approved buckets"
+        >
+          <div className="mb-3 shrink-0 px-2 pt-1">
             <p className="font-metadata text-xs uppercase tracking-[0.16em] text-muted-foreground">Buckets</p>
             <p className="mt-1 text-xs leading-5 text-muted-foreground">Approved for this deployment</p>
           </div>
-          <nav className="flex gap-1 overflow-x-auto lg:flex-col" aria-label="Approved buckets">
+          <nav className="flex min-h-0 flex-1 gap-1 overflow-y-auto overscroll-y-contain [-webkit-overflow-scrolling:touch] lg:flex-col lg:overflow-x-hidden max-lg:overflow-x-auto" aria-label="Bucket names">
             {buckets.map((bucket) => {
               const selected = selectedBucket === bucket;
               return (
@@ -366,7 +445,7 @@ export function S3Browser({ actor, buckets }: Readonly<{ actor: Actor; buckets: 
 
                 <div className="flex flex-wrap items-center justify-between gap-3">
                   <p className="font-metadata text-xs uppercase tracking-[0.14em] text-muted-foreground">
-                    {hasSearch && isSearching ? "Searching bucket" : isLoading ? "Loading index" : `${shownItemCount} ${shownItemCount === 1 ? "item" : "items"}`}
+                    {hasSearch && isSearching ? "Searching bucket" : isLoading ? "Loading index" : shownItemCount === 0 ? "0 items" : `Showing ${pageStart}–${pageEnd} of ${shownItemCount} ${shownItemCount === 1 ? "item" : "items"}`}
                   </p>
                   <div className="flex items-center gap-2">
                     {prefix && <Button onClick={() => browse(selectedBucket, parentPrefix(prefix))} size="sm" variant="ghost"><ChevronLeftIcon className="size-3.5" />Parent</Button>}
@@ -376,7 +455,16 @@ export function S3Browser({ actor, buckets }: Readonly<{ actor: Actor; buckets: 
                 </div>
 
                 {status && <p className="text-sm text-muted-foreground" role="status">{status}</p>}
-                {hasSearch && searchResult?.truncated && <p className="text-sm text-muted-foreground" role="status">Results are partial. Refine your search.</p>}
+                {hasSearch && searchResult?.truncated && (
+                  <div className="flex flex-wrap items-center gap-3">
+                    <p className="text-sm text-muted-foreground" role="status">
+                      {shownItemCount === 0 && !searchScanExhausted
+                        ? "No matches in the scanned portion yet. Continue searching the bucket."
+                        : "Search results are partial. Continue scanning or refine your search."}
+                    </p>
+                    <Button disabled={isSearching} onClick={loadMoreSearchResults} size="sm" type="button" variant="outline">Continue search</Button>
+                  </div>
+                )}
 
                 {visibleListing && (
                   <Table>
@@ -387,13 +475,26 @@ export function S3Browser({ actor, buckets }: Readonly<{ actor: Actor; buckets: 
                             aria-label="Select all visible items"
                             checked={allSelected}
                             className="size-4 cursor-pointer accent-foreground"
-                            disabled={visibleKeys.length === 0}
-                            onChange={() => setSelectedKeys(allSelected ? [] : visibleKeys)}
+                            disabled={pageKeys.length === 0}
+                            onChange={() => setSelectedKeys(allSelected ? selectedKeys.filter((key) => !pageKeys.includes(key)) : [...new Set([...selectedKeys, ...pageKeys])])}
                             ref={(input) => { if (input) input.indeterminate = someSelected && !allSelected; }}
                             type="checkbox"
                           />
                         </TableHead>
-                        <TableHead>Name</TableHead>
+                        <TableHead>
+                          <Button
+                            aria-label={`Sort by name ${nameSort === "asc" ? "descending" : "ascending"}`}
+                            className="h-auto p-0 font-medium"
+                            onClick={() => {
+                              setNameSort((direction) => (direction === "asc" ? "desc" : "asc"));
+                              setTablePage(1);
+                            }}
+                            type="button"
+                            variant="ghost"
+                          >
+                            Name {nameSort === "asc" ? "↑" : "↓"}
+                          </Button>
+                        </TableHead>
                         {hasSearch && <TableHead>Path</TableHead>}
                         <TableHead>Type</TableHead>
                         <TableHead>Size</TableHead>
@@ -402,49 +503,78 @@ export function S3Browser({ actor, buckets }: Readonly<{ actor: Actor; buckets: 
                       </TableRow>
                     </TableHeader>
                     <TableBody>
-                      {visibleListing.prefixes.map((item) => (
-                        <TableRow key={item}>
-                          <TableCell>
-                            <input
-                              aria-label={`Select ${item}`}
-                              checked={selectedKeys.includes(item)}
-                              className="size-4 cursor-pointer accent-foreground"
-                              onChange={(event) => setSelectedKeys((keys) => event.target.checked ? [...keys, item] : keys.filter((key) => key !== item))}
-                              type="checkbox"
-                            />
-                          </TableCell>
-                          <TableCell><Button className="h-auto p-0 font-normal" onClick={() => browse(selectedBucket, item)} variant="link"><FolderIcon className="size-3.5" />{item.slice(prefix.length)}</Button></TableCell>
-                          <TableCell className="text-muted-foreground">Folder</TableCell>
-                          <TableCell className="text-muted-foreground">—</TableCell>
-                          <TableCell className="text-muted-foreground">—</TableCell>
-                          {actor.role === "admin" && <TableCell>—</TableCell>}
-                        </TableRow>
-                      ))}
-                      {visibleListing.objects.map((object) => {
-                        const filename = object.key.split("/").at(-1) ?? object.key;
+                      {pageRows.map((row) => {
+                        if (row.kind === "prefix") {
+                          return (
+                            <TableRow key={row.key}>
+                              <TableCell>
+                                <input
+                                  aria-label={`Select ${rowSelectionLabel(row)}`}
+                                  checked={selectedKeys.includes(row.key)}
+                                  className="size-4 cursor-pointer accent-foreground"
+                                  onChange={(event) => setSelectedKeys((keys) => event.target.checked ? [...keys, row.key] : keys.filter((key) => key !== row.key))}
+                                  type="checkbox"
+                                />
+                              </TableCell>
+                              <TableCell><Button className="h-auto p-0 font-normal" onClick={() => browse(selectedBucket, row.key)} variant="link"><FolderIcon className="size-3.5" />{row.name}</Button></TableCell>
+                              {hasSearch && <TableCell className="text-muted-foreground">—</TableCell>}
+                              <TableCell className="text-muted-foreground">Folder</TableCell>
+                              <TableCell className="text-muted-foreground">—</TableCell>
+                              <TableCell className="text-muted-foreground">—</TableCell>
+                              {actor.role === "admin" && <TableCell>—</TableCell>}
+                            </TableRow>
+                          );
+                        }
+
+                        const object = row.object;
                         const objectPrefix = containingPrefix(object.key);
                         return (
                           <TableRow data-state={selectedKeys.includes(object.key) ? "selected" : undefined} key={object.key}>
                             <TableCell>
                               <input
-                                aria-label={`Select ${filename}`}
+                                aria-label={`Select ${rowSelectionLabel(row)}`}
                                 checked={selectedKeys.includes(object.key)}
                                 className="size-4 cursor-pointer accent-foreground"
                                 onChange={(event) => setSelectedKeys((keys) => event.target.checked ? [...keys, object.key] : keys.filter((key) => key !== object.key))}
                                 type="checkbox"
                               />
                             </TableCell>
-                            <TableCell><a className="text-foreground underline-offset-4 hover:underline" href={`/api/objects/${encodeURIComponent(selectedBucket)}/${object.key.split("/").map(encodeURIComponent).join("/")}`}>{hasSearch ? filename : object.key.slice(prefix.length)}</a></TableCell>
+                            <TableCell><a className="text-foreground underline-offset-4 hover:underline" href={`/api/objects/${encodeURIComponent(selectedBucket)}/${object.key.split("/").map(encodeURIComponent).join("/")}`}>{row.name}</a></TableCell>
                             {hasSearch && <TableCell><Button aria-label={`Open ${objectPrefix || "Root"}`} className="h-auto p-0 font-metadata text-xs font-normal" onClick={() => browse(selectedBucket, objectPrefix)} variant="link">{objectPrefix || "Root"}</Button></TableCell>}
                             <TableCell className="text-muted-foreground">Object</TableCell>
                             <TableCell className="font-metadata text-xs text-muted-foreground">{formatBytes(object.size)}</TableCell>
                             <TableCell className="font-metadata text-xs text-muted-foreground">{formatDate(object.lastModified)}</TableCell>
-                            {actor.role === "admin" && <TableCell><Button aria-label={`Delete ${filename}`} onClick={() => { setDeleteConfirmation(""); setDeleteKey(object.key); }} size="sm" variant="destructive"><TrashIcon className="size-3.5" />Delete</Button></TableCell>}
+                            {actor.role === "admin" && <TableCell><Button aria-label={`Delete ${rowSelectionLabel(row)}`} onClick={() => { setDeleteConfirmation(""); setDeleteKey(object.key); }} size="sm" variant="destructive"><TrashIcon className="size-3.5" />Delete</Button></TableCell>}
                           </TableRow>
                         );
                       })}
                     </TableBody>
                   </Table>
+                )}
+                {visibleListing && shownItemCount > 0 && (
+                  <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+                    <label className="flex items-center gap-2 text-sm text-muted-foreground">
+                      <span>Rows per page</span>
+                      <select
+                        aria-label="Rows per page"
+                        className="h-8 border border-[#eaeaea] bg-white px-2 text-sm text-foreground"
+                        onChange={(event) => {
+                          setPageSize(Number(event.target.value) as PageSize);
+                          setTablePage(1);
+                        }}
+                        value={pageSize}
+                      >
+                        {PAGE_SIZE_OPTIONS.map((size) => (
+                          <option key={size} value={size}>{size}</option>
+                        ))}
+                      </select>
+                    </label>
+                    <div className="flex items-center gap-2">
+                      <Button disabled={pagination.page <= 1} onClick={() => setTablePage((page) => Math.max(1, page - 1))} size="sm" type="button" variant="outline">Previous</Button>
+                      <span className="font-metadata text-xs text-muted-foreground">Page {pagination.page} of {pagination.totalPages}</span>
+                      <Button disabled={pagination.page >= pagination.totalPages} onClick={() => setTablePage((page) => Math.min(pagination.totalPages, page + 1))} size="sm" type="button" variant="outline">Next</Button>
+                    </div>
+                  </div>
                 )}
                 {selectedKeys.length > 0 && (
                   <aside aria-label="Selected items" className="flex flex-col gap-3 border border-[#eaeaea] bg-muted/40 p-4 sm:flex-row sm:flex-wrap sm:items-center sm:justify-between">

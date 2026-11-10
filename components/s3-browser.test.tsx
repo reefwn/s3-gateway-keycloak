@@ -305,7 +305,7 @@ describe("S3Browser", () => {
     fetchMock.mockResolvedValueOnce(jsonResponse({ objects: [{ key: "archive/2026/report.pdf", size: 4 }], truncated: true }));
     fireEvent.change(screen.getByRole("textbox", { name: "Search this bucket" }), { target: { value: "report" } });
     const openPath = await screen.findByRole("button", { name: "Open archive/2026/" });
-    expect(screen.getByText("Results are partial. Refine your search.")).toBeInTheDocument();
+    expect(screen.getByText(/Search results are partial/i)).toBeInTheDocument();
     expect(screen.queryByRole("link", { name: "photo.png" })).not.toBeInTheDocument();
     fireEvent.click(screen.getByRole("checkbox", { name: "Select all visible items" }));
     expect(screen.getByRole("complementary", { name: "Selected items" })).toHaveTextContent("1 selected");
@@ -314,7 +314,7 @@ describe("S3Browser", () => {
     expect(fetchMock).toHaveBeenLastCalledWith("/api/objects/reports?prefix=archive%2F2026%2F", expect.anything());
     expect(screen.getByRole("textbox", { name: "Search this bucket" })).toHaveValue("");
     expect(screen.queryByRole("complementary", { name: "Selected items" })).not.toBeInTheDocument();
-    expect(screen.queryByText("Results are partial. Refine your search.")).not.toBeInTheDocument();
+    expect(screen.queryByText(/Search results are partial/i)).not.toBeInTheDocument();
     expect(await screen.findByRole("link", { name: "report.pdf" })).toBeInTheDocument();
   });
 
@@ -342,7 +342,7 @@ describe("S3Browser", () => {
     await act(async () => { resolveSearch(jsonResponse({ objects: [{ key: "old.pdf", size: 4 }], truncated: true })); });
     expect(screen.getByRole("link", { name: "new.png" })).toBeInTheDocument();
     expect(screen.queryByRole("link", { name: "old.pdf" })).not.toBeInTheDocument();
-    expect(screen.queryByText("Results are partial. Refine your search.")).not.toBeInTheDocument();
+    expect(screen.queryByText(/Search results are partial/i)).not.toBeInTheDocument();
   });
 
   it("shows search failure without displaying the normal listing as search results", async () => {

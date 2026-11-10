@@ -90,6 +90,14 @@ function normalizeListedObject(object: ListedObjectEntry): ListedObject | undefi
   };
 }
 
+function objectMatchesSearch(key: string, normalizedQuery: string): boolean {
+  const lowerKey = key.toLocaleLowerCase();
+  if (lowerKey.includes(normalizedQuery)) return true;
+
+  const segments = key.split("/").filter(Boolean);
+  return segments.some((segment) => segment.toLocaleLowerCase().includes(normalizedQuery));
+}
+
 function isPreviewableContentType(contentType: string | undefined): contentType is string {
   const mediaType = contentType?.split(";", 1)[0]?.trim().toLocaleLowerCase();
 
@@ -302,7 +310,7 @@ export function createS3Service(input: Readonly<{
       };
     },
 
-    async searchObjects(bucket: string, query: string): Promise<OperatorSearchResult> {
+    async searchObjects(bucket: string, query: string, startContinuationToken?: string): Promise<OperatorSearchResult> {
       assertAllowedBucket(bucket);
       const normalizedQuery = query.trim().toLocaleLowerCase();
       if (!normalizedQuery) throw new Error("Search query is required");
@@ -310,7 +318,7 @@ export function createS3Service(input: Readonly<{
       const maxResults = input.searchMaxResults ?? DEFAULT_SEARCH_MAX_RESULTS;
       const maxPages = input.searchMaxPages ?? DEFAULT_SEARCH_MAX_PAGES;
       const objects: ListedObject[] = [];
-      let continuationToken: string | undefined;
+      let continuationToken: string | undefined = startContinuationToken;
       let pagesRead = 0;
 
       do {
@@ -321,7 +329,7 @@ export function createS3Service(input: Readonly<{
 
         for (const entry of page.Contents ?? []) {
           const object = normalizeListedObject(entry);
-          if (!object || !object.key.toLocaleLowerCase().includes(normalizedQuery)) continue;
+          if (!object || !objectMatchesSearch(object.key, normalizedQuery)) continue;
 
           objects.push(object);
           if (objects.length === maxResults) break;
@@ -330,7 +338,12 @@ export function createS3Service(input: Readonly<{
         continuationToken = page.NextContinuationToken;
       } while (continuationToken && objects.length < maxResults && pagesRead < maxPages);
 
-      return { objects, truncated: Boolean(continuationToken) || objects.length === maxResults };
+      const truncated = Boolean(continuationToken) || objects.length >= maxResults;
+      return {
+        objects,
+        truncated,
+        ...(continuationToken ? { continuationToken } : {}),
+      };
     },
 
     async getObject(bucket: string, key: string) {

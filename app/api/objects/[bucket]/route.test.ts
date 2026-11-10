@@ -72,7 +72,7 @@ describe("GET /api/objects/[bucket]", () => {
     expect(response.headers.get("Cache-Control")).toBe("no-store");
     await expect(response.json()).resolves.toMatchObject({ objects: [{ key: "2026/report.pdf" }], truncated: false });
     expect(mocks.requireCapability).toHaveBeenCalledWith("list");
-    expect(mocks.service.searchObjects).toHaveBeenCalledWith("reports", "report");
+    expect(mocks.service.searchObjects).toHaveBeenCalledWith("reports", "report", undefined);
     expect(mocks.runAuditedOperation).toHaveBeenCalledWith(
       expect.objectContaining({ context: expect.objectContaining({ action: "search-objects", bucket: "reports", prefix: "report" }) }),
       expect.any(Function)

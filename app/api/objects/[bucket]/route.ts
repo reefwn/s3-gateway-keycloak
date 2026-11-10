@@ -43,9 +43,10 @@ export async function GET(request: Request, { params }: Context): Promise<Respon
     const search = url.searchParams.get("search");
 
     if (search?.trim()) {
+      const searchContinuationToken = url.searchParams.get("searchContinuationToken") ?? undefined;
       const results = await runAuditedOperation(
         { audit: auditRepository, context: auditContext(request, actor, "search-objects", bucket, undefined, search) },
-        () => getS3Service().searchObjects(bucket, search)
+        () => getS3Service().searchObjects(bucket, search, searchContinuationToken)
       );
 
       return Response.json(results, { headers: { "Cache-Control": "no-store" } });
