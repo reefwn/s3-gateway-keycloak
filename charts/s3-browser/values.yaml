@@ -1,6 +1,6 @@
 image:
   repository: reefwn/s3-gateway-keycloak
-  tag: v1.0.1
+  tag: v1.1.2
   pullPolicy: IfNotPresent
 
 imagePullSecrets: []

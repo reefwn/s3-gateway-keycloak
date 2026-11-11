@@ -39,7 +39,7 @@ describe("s3-browser chart", () => {
     expect(result.stdout).not.toContain("kind: Secret");
     expect(result.stdout).not.toContain("AWS_ACCESS_KEY_ID");
     expect(result.stdout).toContain("name: deployment-secrets");
-    expect(result.stdout).toContain('image: "reefwn/s3-gateway-keycloak:v1.0.1"');
+    expect(result.stdout).toContain('image: "reefwn/s3-gateway-keycloak:v1.1.2"');
     expect(result.stdout).toContain("readOnlyRootFilesystem: true");
     expect(result.stdout).toContain("allowPrivilegeEscalation: false");
     expect(result.stdout).toContain("- ALL");

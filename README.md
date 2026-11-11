@@ -76,8 +76,8 @@ an IRSA IAM role, storage classes/PVs, backups, or Kubernetes Secrets.
 Build and publish the production image before installing the chart:
 
 ```sh
-docker build -t reefwn/s3-gateway-keycloak:v1.0.1 .
-docker push reefwn/s3-gateway-keycloak:v1.0.1
+docker build -t reefwn/s3-gateway-keycloak:v1.1.2 .
+docker push reefwn/s3-gateway-keycloak:v1.1.2
 sh scripts/verify-production-image.sh
 ```
 
